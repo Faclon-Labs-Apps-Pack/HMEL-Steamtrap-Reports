@@ -1,0 +1,25 @@
+{
+  "name": "backend",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "generate": "tsx src/generateReports.ts",
+    "generate:management": "tsx src/generateReports.ts --management",
+    "generate:daily": "tsx src/generateReports.ts --daily",
+    "start": "tsx src/scheduler.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "cron-parser": "^5.6.2",
+    "dotenv": "^16.4.7",
+    "exceljs": "^4.4.0",
+    "express": "^5.2.1"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^24.13.2",
+    "tsx": "^4.19.2",
+    "typescript": "~5.7.3"
+  }
+}
