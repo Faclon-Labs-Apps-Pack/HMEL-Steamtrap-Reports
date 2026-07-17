@@ -16,6 +16,8 @@ const HEADERS = [
   'Number of Feedbacks',
   'Leak Rate',
   'Cost of Steam',
+  'Saving',
+  'Loss',
 ];
 
 /**
@@ -51,6 +53,8 @@ export function buildDailyAnalysisSheet(sheet: Worksheet, rows: DailyAnalysisRow
       row.feedbackCount,
       row.leakRate,
       row.costOfSteam,
+      Number(row.steamSaving.toFixed(2)),
+      Number(row.steamLoss.toFixed(2)),
     ];
     excelRow.eachCell((cell) => {
       cell.border = ALL_BORDERS;

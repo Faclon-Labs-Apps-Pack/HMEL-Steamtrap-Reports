@@ -14,6 +14,12 @@ const HEADERS = [
   'Change in Status',
   'Number of Corrective Actions',
   'Number of Feedbacks',
+  'Leak Rate',
+  'Steam Saving (MT)',
+  'Steam Loss (MT)',
+  'Cost of Steam(Rs/Ton)',
+  'Loss (INR)',
+  'Savings (INR)',
 ];
 
 /** Populates a "Refinery"/"Petchem" per-device detail sheet — one row per device in that category, current-week windowed. */
@@ -40,6 +46,12 @@ export function buildDetailSheet(sheet: Worksheet, rows: DeviceDetailRow[]): voi
       row.statusChangeCount,
       row.correctiveActionCount,
       row.feedbackCount,
+      row.leakRate,
+      Number(row.steamSavingMT.toFixed(2)),
+      Number(row.steamLossMT.toFixed(2)),
+      row.costOfSteamPerTon ?? 'N/A',
+      row.lossINR !== undefined ? Number(row.lossINR.toFixed(2)) : 'N/A',
+      row.savingsINR !== undefined ? Number(row.savingsINR.toFixed(2)) : 'N/A',
     ];
     excelRow.eachCell((cell) => {
       cell.border = ALL_BORDERS;

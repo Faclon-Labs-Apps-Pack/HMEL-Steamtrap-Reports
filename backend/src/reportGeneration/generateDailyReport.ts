@@ -6,6 +6,7 @@ import { getCorrectiveActions } from '../services/correctiveActionApi';
 import { getFeedbackCountsByDevice } from '../services/feedbackApi';
 import { getTimeSeriesStatsByDevice } from '../services/deviceTimeSeriesStats';
 import { getDevicePropertiesByDevice } from '../services/devicePropertiesApi';
+import { getSteamLossByDevice, getSteamSavingByDevice } from '../services/steamConsumptionApi';
 import { buildCorrectiveActionCountByDevice } from '../lib/segregateCorrectiveActions';
 import { buildDailyAnalysisRows, buildDailyLiveStatusRows } from '../lib/buildDailyReportRows';
 import { getTodayRange, normalizeDateRange, toEpochMs } from '../lib/dateRange';
@@ -66,6 +67,12 @@ export async function generateDailyReportWorkbook(
   report(`Loading device properties (pressure, baseline temps, leak rate) for ${devices.length} devices…`);
   const propertiesByDevID = await getDevicePropertiesByDevice(devices);
 
+  report(`Loading steam loss for ${devices.length} devices…`);
+  const steamLossByDevID = await getSteamLossByDevice(devices, startMs, endMs);
+
+  report(`Loading steam saving for ${devices.length} devices…`);
+  const steamSavingByDevID = await getSteamSavingByDevice(devices, startMs, endMs);
+
   report('Assembling report…');
   const correctiveActionTotal = [...correctiveActionCountByDevID.values()].reduce((sum, n) => sum + n, 0);
   const feedbackTotal = [...feedbackCountByDevID.values()].reduce((sum, n) => sum + n, 0);
@@ -81,8 +88,12 @@ export async function generateDailyReportWorkbook(
     correctiveActionCountByDevID,
     feedbackCountByDevID,
     propertiesByDevID,
+    steamLossByDevID,
+    steamSavingByDevID,
     durationHours,
   );
+  const steamLossTotal = analysisRows.reduce((sum, r) => sum + r.steamLoss, 0);
+  const steamSavingTotal = analysisRows.reduce((sum, r) => sum + r.steamSaving, 0);
   const liveStatusRows = buildDailyLiveStatusRows(devices, lastDPs, { pt1ByDevID, pt2ByDevID }, propertiesByDevID);
 
   const workbook = new Workbook();
@@ -98,6 +109,8 @@ export async function generateDailyReportWorkbook(
     correctiveActionTotal,
     feedbackTotal,
     statusChangeTotal,
+    steamLossTotal,
+    steamSavingTotal,
   );
   buildDailyAnalysisSheet(workbook.addWorksheet('Analysis'), analysisRows);
   buildDailyLiveStatusSheet(workbook.addWorksheet('Live Status'), liveStatusRows);

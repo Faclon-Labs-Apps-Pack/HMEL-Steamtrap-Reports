@@ -22,11 +22,9 @@ function formatDate(date: Date): string {
  * breakdown across ALL devices (no plant-category split — this report doesn't segregate by
  * category, per explicit spec), and aggregate parameters. Cost of Steam is hardcoded (see
  * `HARDCODED_COST_OF_STEAM`) per explicit request, not derived from device data. Loss/Savings
- * (MT/INR) stay "N/A" — the platform's designated sensors for these (D11 "Steam Loss Value",
- * D12 "Steam Saving Value") are defined but read back as 0 for every device regardless of
- * actual leak status (confirmed live 2026-07-16, including on a device currently in Heavy
- * Leak) — they're not actually being computed in this environment, so showing them would be
- * misleading fake zeros.
+ * (MT) are summed from each device's `steamConsumptionCustom` delta (D11 for loss, D12 for
+ * saving) rather than a raw last-value read — INR figures are that total times the hardcoded
+ * cost of steam.
  */
 export function buildDailySummarySheet(
   sheet: Worksheet,
@@ -37,6 +35,8 @@ export function buildDailySummarySheet(
   correctiveActionTotal: number,
   feedbackTotal: number,
   statusChangeTotal: number,
+  steamLossMT: number,
+  steamSavingMT: number,
 ): void {
   sheet.columns = [{ width: 22 }, { width: 16 }, { width: 18 }];
 
@@ -108,12 +108,13 @@ export function buildDailySummarySheet(
     }
   });
   row += 1;
+  const costOfSteamPerTon = Number(HARDCODED_COST_OF_STEAM);
   const numberRows: [string, string][] = [
     ['Cost of Steam (Rs/Ton)', HARDCODED_COST_OF_STEAM],
-    ['Loss (MT)', 'N/A'],
-    ['Savings (MT)', 'N/A'],
-    ['Loss (INR)', 'N/A'],
-    ['Savings (INR)', 'N/A'],
+    ['Loss (MT)', steamLossMT.toFixed(2)],
+    ['Savings (MT)', steamSavingMT.toFixed(2)],
+    ['Loss (INR)', (steamLossMT * costOfSteamPerTon).toFixed(2)],
+    ['Savings (INR)', (steamSavingMT * costOfSteamPerTon).toFixed(2)],
   ];
   for (const [label, value] of numberRows) {
     sheet.getCell(row, 1).value = label;

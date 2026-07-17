@@ -48,6 +48,21 @@ export function startFileServer(): ReturnType<express.Express['listen']> {
       return;
     }
 
+    // Express routes HEAD to the same handler as GET (HEAD = same response, no body). Many
+    // attachment-fetchers do a HEAD probe (checking Content-Length/existence) before the real
+    // GET — if we ran the full download+delete flow for that too, the probe alone would delete
+    // the file, leaving the real GET to 404 and the email to go out with a broken/empty
+    // attachment despite the file having been completely fine on disk. So: respond to HEAD with
+    // headers only, and only the real GET counts as "the one download" that triggers deletion.
+    if (req.method === 'HEAD') {
+      console.log(`[fileServer] HEAD probe for ${fileName} from ${requester} (not treated as the download)`);
+      res.set('Content-Length', String(stats.size));
+      res.set('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.set('Content-Disposition', `attachment; filename="${fileName}"`);
+      res.status(200).end();
+      return;
+    }
+
     console.log(`[fileServer] Serving ${fileName} to ${requester}…`);
     res.download(filePath, fileName, async (err) => {
       if (!err) {

@@ -5,6 +5,13 @@ import type { CorrectiveActionMatrixData } from '../lib/segregateCorrectiveActio
 import type { DateRange } from '../lib/dateRange';
 import { ALL_BORDERS, BOLD_FONT, CENTER, HEADER_FILL, HEADER_FONT, LEFT } from './xlsxStyles';
 
+export interface SteamKpiTotals {
+  steamLossMT: number;
+  lossINR: number;
+  steamSavingMT: number;
+  savingsINR: number;
+}
+
 function formatDate(date: Date): string {
   return date.toLocaleString(undefined, {
     day: '2-digit',
@@ -17,9 +24,9 @@ function formatDate(date: Date): string {
 
 /**
  * Populates one "SteamtrapStatusOverview-<category>" sheet: report metadata, the KPI table
- * (Cost of Steam, Steam Loss, Loss/Savings INR — kept as headers with "N/A" values since none
- * have a defined sensor/formula per the template's own author notes; Overall Trap Health
- * removed per explicit request even though it had a defined formula), the Unit vs Trap Status
+ * (Cost of Steam is hardcoded per explicit request; Steam Loss/Savings MT and INR are summed
+ * from that plant category's per-device rows — see `steamKpis`; Overall Trap Health removed
+ * per explicit request even though it had a defined formula), the Unit vs Trap Status
  * matrix for that plant category only (INSTANTANEOUS — current status at generation time, not
  * time-windowed), and a second Plant Category/Unit Name table (Corrective Action count + No.
  * of Status changes, both current-week windowed) — this second table lives ~15 rows below the
@@ -33,6 +40,7 @@ export function buildOverviewSheet(
   generatedAt: Date,
   matrix: UnitStatusMatrix,
   correctiveActionMatrix: CorrectiveActionMatrixData,
+  steamKpis: SteamKpiTotals,
 ): void {
   const group = matrix.groups.find((g) => g.plantCategory === plantCategory);
   const totalDevices = group?.subtotalCount ?? 0;
@@ -74,10 +82,10 @@ export function buildOverviewSheet(
 
   const kpiRows: [string, string][] = [
     ['Cost of Steam (Rs)', '2473'], // hardcoded per explicit request — not derived from device data
-    ['Steam Loss (MT)', 'N/A'],
-    ['Loss (INR)', 'N/A'],
-    ['Savings (MT)', 'N/A'],
-    ['Savings (INR)', 'N/A'],
+    ['Steam Loss (MT)', steamKpis.steamLossMT.toFixed(2)],
+    ['Loss (INR)', steamKpis.lossINR.toFixed(2)],
+    ['Savings (MT)', steamKpis.steamSavingMT.toFixed(2)],
+    ['Savings (INR)', steamKpis.savingsINR.toFixed(2)],
   ];
   for (const [label, value] of kpiRows) {
     sheet.getCell(row, 1).value = label;

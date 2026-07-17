@@ -23,6 +23,8 @@ export interface DailyAnalysisRow {
   feedbackCount: number;
   leakRate: string;
   costOfSteam: string;
+  steamSaving: number;
+  steamLoss: number;
   [key: string]: unknown;
 }
 
@@ -53,6 +55,8 @@ export function buildDailyAnalysisRows(
   correctiveActionCountByDevID: Map<string, number>,
   feedbackCountByDevID: Map<string, number>,
   propertiesByDevID: Map<string, SteamTrapProperties>,
+  steamLossByDevID: Map<string, number>,
+  steamSavingByDevID: Map<string, number>,
   durationHours: number,
 ): DailyAnalysisRow[] {
   const statusByDevID = new Map(lastDPs.map((dp) => [dp.devID, dp.value]));
@@ -75,6 +79,8 @@ export function buildDailyAnalysisRows(
       feedbackCount: feedbackCountByDevID.get(device.devID) ?? 0,
       leakRate: properties?.leakRate || 'N/A',
       costOfSteam: properties?.costOfSteam !== undefined ? String(properties.costOfSteam) : 'N/A',
+      steamSaving: steamSavingByDevID.get(device.devID) ?? 0,
+      steamLoss: steamLossByDevID.get(device.devID) ?? 0,
     };
   });
 }

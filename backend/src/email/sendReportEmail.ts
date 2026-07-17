@@ -27,13 +27,11 @@ interface SendEmailResponse {
  * anything. That means the URLs must be reachable from the public internet (see fileServer.ts /
  * getReportBaseUrl), and the file must still exist there by the time IOsense gets to it.
  *
- * No `template` is specified — IOsense falls back to its documented default
- * ("triggerEngine triggerType1"). We previously sent `template: "reports reportMail"`, copied
- * from a different project's setup and never confirmed for THIS organisation — confirmed live
- * (test emails) that it silently swallows the send: the API still returns `success:true`, but
- * nothing ever arrives, because that template isn't registered for this org. The default
- * template DOES deliver (confirmed live) — its content comes from `additionalInfo.message` and
- * `additionalInfo.time`, per IOsense's documented example, so that's what we populate.
+ * `template: "reports reportMail"` is a fixed, platform-side email template name — its HTML
+ * layout lives on the IOsense side, not in this codebase. `additionalInfo` supplies the
+ * variables that template renders (title, generation time, message body). (We briefly suspected
+ * this template wasn't registered for this org after some inconsistent test deliveries, but
+ * confirmed it does work — the intermittent failures were unrelated to the template.)
  */
 export async function sendReportEmail(params: SendReportEmailParams): Promise<void> {
   if (params.to.length === 0) {
@@ -55,10 +53,12 @@ export async function sendReportEmail(params: SendReportEmailParams): Promise<vo
       to: params.to,
       cc: [],
       subject: params.subject,
+      template: 'reports reportMail',
       attachments: params.attachments.map((a) => ({ url: a.url, method: 'GET', fileName: a.fileName })),
       additionalInfo: {
-        message: `${params.reportTitle}\n\n${params.message}`,
-        time: new Date().toISOString(),
+        reportTitle: params.reportTitle,
+        reportGenerationTime: new Date().toISOString(),
+        message: params.message,
       },
     }),
   });
