@@ -30,12 +30,13 @@ export function startFileServer(): ReturnType<express.Express['listen']> {
     const filePath = path.join(OUTPUT_DIR, fileName);
 
     const requester = req.ip ?? 'unknown';
+    console.log(`[fileServer] ${req.method} /report/${fileName} from ${requester} -> resolved path: ${filePath} (OUTPUT_DIR=${OUTPUT_DIR})`);
 
     let stats;
     try {
       stats = await stat(filePath);
     } catch {
-      console.log(`[fileServer] 404 ${fileName} requested by ${requester} (already downloaded or never generated)`);
+      console.log(`[fileServer] 404 ${fileName} requested by ${requester} (already downloaded or never generated) — checked path: ${filePath}`);
       res.status(404).send('Not found (already downloaded or never generated).');
       return;
     }
@@ -63,11 +64,11 @@ export function startFileServer(): ReturnType<express.Express['listen']> {
       return;
     }
 
-    console.log(`[fileServer] Serving ${fileName} to ${requester}…`);
+    console.log(`[fileServer] Serving ${fileName} to ${requester} (${stats.size} bytes)…`);
     res.download(filePath, fileName, async (err) => {
       if (!err) {
         await unlink(filePath).catch(() => {});
-        console.log(`[fileServer] Served and deleted ${fileName}`);
+        console.log(`[fileServer] Served and deleted ${fileName} (${stats.size} bytes sent)`);
       } else {
         console.error(`[fileServer] Error streaming ${fileName}:`, err);
       }

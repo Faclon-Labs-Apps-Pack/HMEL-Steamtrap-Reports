@@ -32,6 +32,17 @@ export function getLastWeekRange(now: Date = new Date()): DateRange {
   return { start, end };
 }
 
+/**
+ * 1st 00:00:00.000 through the last day 23:59:59.999 of the month before the current one (local
+ * time) — used by the Monthly Management Report, mirroring `getLastWeekRange`'s "report on the
+ * last fully-completed period, not the still in-progress current one" philosophy.
+ */
+export function getLastMonthRange(now: Date = new Date()): DateRange {
+  const start = new Date(now.getFullYear(), now.getMonth() - 1, 1, 0, 0, 0, 0);
+  const end = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999); // day 0 of this month = last day of last month
+  return { start, end };
+}
+
 /** Today, 00:00:00 through right now (local time) — used by the Daily Report, which is windowed to "today" per its name and the source template's own 24hr duration. */
 export function getTodayRange(now: Date = new Date()): DateRange {
   const start = new Date(now);

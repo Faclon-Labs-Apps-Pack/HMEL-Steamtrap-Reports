@@ -1,7 +1,7 @@
 import type { Worksheet } from 'exceljs';
-import { classifyStatus, STATUS_COLUMNS } from '../lib/statusClassification';
+import { STATUS_COLUMNS, type StatusColumn } from '../lib/statusClassification';
 import type { DateRange } from '../lib/dateRange';
-import type { Device, LastDataPoint } from '../types/device';
+import type { Device } from '../types/device';
 import { ALL_BORDERS, BOLD_FONT, HEADER_FILL, HEADER_FONT } from './xlsxStyles';
 
 /** Hardcoded per explicit request — not derived from device data. */
@@ -29,7 +29,7 @@ function formatDate(date: Date): string {
 export function buildDailySummarySheet(
   sheet: Worksheet,
   devices: Device[],
-  lastDPs: LastDataPoint[],
+  statusCounts: Record<StatusColumn, number>,
   range: DateRange,
   generatedAt: Date,
   correctiveActionTotal: number,
@@ -39,12 +39,6 @@ export function buildDailySummarySheet(
   steamSavingMT: number,
 ): void {
   sheet.columns = [{ width: 22 }, { width: 16 }, { width: 18 }];
-
-  const statusByDevID = new Map(lastDPs.map((dp) => [dp.devID, dp.value]));
-  const statusCounts = Object.fromEntries(STATUS_COLUMNS.map((c) => [c, 0])) as Record<string, number>;
-  for (const device of devices) {
-    statusCounts[classifyStatus(statusByDevID.get(device.devID))] += 1;
-  }
 
   let row = 1;
   const metaRows: [string, string][] = [

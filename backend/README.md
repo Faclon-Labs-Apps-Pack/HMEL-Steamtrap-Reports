@@ -1,8 +1,9 @@
 # Backend — Automated Report Generation & Email
 
-Standalone Node service that generates the same two Excel reports as the frontend's
-"Generate Management Report" / "Generate Daily Report" buttons, but automatically — on a
-schedule, emailed to configured recipients, no browser or manual click involved.
+Standalone Node service that generates the same Excel reports as the frontend's
+"Generate Management Report" / "Generate Daily Report" / "Generate Monthly Report" buttons, but
+automatically — on a schedule, emailed to configured recipients, no browser or manual click
+involved.
 
 Authenticates with a **Personal Access Token (PAT)** instead of the frontend's SSO/JWT flow —
 PATs don't expire, which is what makes unattended automation possible.
@@ -30,7 +31,15 @@ Fill in `.env`:
   start (default 15). E.g. scheduled for `10:10` with `REPORT_LEAD_TIME_MINUTES=2` means
   generation starts at `10:08`; the email still goes out at `10:10`, not earlier, regardless of
   how quickly generation finishes.
-- `MANAGEMENT_REPORT_RECIPIENTS`, `DAILY_REPORT_RECIPIENTS` — comma-separated email addresses.
+- `MONTHLY_REPORT_DATE` + `MONTHLY_REPORT_TIME` — day-of-month (`1`-`28`, capped so it exists in
+  every month) + plain 24-hour `HH:MM` for when the Monthly Report should be ready, e.g.
+  `MONTHLY_REPORT_DATE=1`, `MONTHLY_REPORT_TIME=06:00` for the 1st of every month at 6:00 AM. Same
+  exact 5-sheet template as the Management Report — the only difference is the time window (last
+  fully-completed calendar month instead of last fully-completed week). Raw cron also works via
+  `MONTHLY_REPORT_CRON` (e.g. for "last day of the month", which a plain day-of-month can't
+  express) — leave `MONTHLY_REPORT_DATE`/`MONTHLY_REPORT_TIME` blank to use it.
+- `MANAGEMENT_REPORT_RECIPIENTS`, `DAILY_REPORT_RECIPIENTS`, `MONTHLY_REPORT_RECIPIENTS` —
+  comma-separated email addresses.
 - `REPORT_BASE_URL` — **must be a publicly reachable URL**, not localhost. See "Email delivery"
   below for why this is non-negotiable.
 
@@ -38,9 +47,10 @@ Fill in `.env`:
 
 **One-shot, manual/externally-scheduled** (no email, no `.env` scheduling/recipient vars needed):
 ```bash
-npm run generate              # both reports, written to output/
+npm run generate              # all three reports, written to output/
 npm run generate:management
 npm run generate:daily
+npm run generate:monthly
 ```
 Use this if you'd rather drive scheduling from cron/systemd/CI yourself and handle delivery
 separately.
@@ -58,8 +68,8 @@ This is a long-running process — keep it alive with pm2, systemd, Docker, or s
    URL, when it's due).
 4. At the scheduled time itself: sends the email via IOsense's `sendEmail` API with a link back
    to the file server as the attachment, then removes the pending entry.
-5. Reschedules itself for the next occurrence (handles daily and weekly cron patterns correctly
-   — not a fixed interval).
+5. Reschedules itself for the next occurrence (handles daily, weekly, and monthly cron patterns
+   correctly — not a fixed interval).
 
 `output/pending-emails.json` is what makes step 4 crash-safe — if this process dies between
 generating and sending, the entry survives on disk and gets picked up by step 2 on the next

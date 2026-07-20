@@ -12,6 +12,7 @@ import { CorrectiveActionMatrix } from '../components/CorrectiveActionMatrix';
 import { GenerateExcelReportButton } from '../components/GenerateExcelReportButton';
 import { generateManagementReportWorkbook } from '../reportGeneration/generateManagementReport';
 import { generateDailyReportWorkbook } from '../reportGeneration/generateDailyReport';
+import { generateMonthlyReportWorkbook } from '../reportGeneration/generateMonthlyReport';
 import { segregateByUnit } from '../lib/segregateByUnit';
 import { extractDepartmentFromTags } from '../lib/departmentTag';
 import { getCurrentWeekRange, normalizeDateRange, toEpochMs, type DateRange } from '../lib/dateRange';
@@ -154,6 +155,11 @@ export function SteamTrapStatusPage() {
             idleLabel="Generate Daily Report"
             generate={generateDailyReportWorkbook}
             filename={() => `Steam-Trap-Daily-Report_${new Date().toISOString().slice(0, 10)}.xlsx`}
+          />
+          <GenerateExcelReportButton
+            idleLabel="Generate Monthly Report"
+            generate={generateMonthlyReportWorkbook}
+            filename={() => `Steam-Trap-Monthly-Report_${new Date().toISOString().slice(0, 10)}.xlsx`}
           />
         </div>
       </div>

@@ -7,6 +7,7 @@
     "generate": "tsx src/generateReports.ts",
     "generate:management": "tsx src/generateReports.ts --management",
     "generate:daily": "tsx src/generateReports.ts --daily",
+    "generate:monthly": "tsx src/generateReports.ts --monthly",
     "start": "tsx src/scheduler.ts",
     "typecheck": "tsc --noEmit"
   },

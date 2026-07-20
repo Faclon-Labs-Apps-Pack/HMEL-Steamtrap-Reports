@@ -1,0 +1,46 @@
+# Nginx reverse-proxy template for the HMEL Steamtrap Reports backend.
+#
+# The backend (backend/src/fileServer.ts) serves EVERYTHING on one port — the frontend's
+# production build AND /report/:fileName — so this config only ever needs one location block.
+# No separate /static/ rule is needed; do not add one, it would just shadow the backend's own
+# static-file handling for no benefit.
+#
+# Usage: copy this file, replace the two placeholders below, and place it wherever this
+# platform's nginx site configs live (e.g. /etc/nginx/sites-available/<domain>.conf), then
+# symlink into sites-enabled/ and reload nginx (`sudo nginx -t && sudo systemctl reload nginx`).
+#
+# Placeholders to replace:
+#   __DOMAIN__        e.g. hmelreports.iocompute.ai
+#   __BACKEND_PORT__  the actual port backend/ is listening on for THIS deployment — check the
+#                      PM2 process logs for "[fileServer] Listening on port <N>" right after
+#                      (re)deploying; this platform assigns it dynamically per deployment, so it
+#                      is NOT stable across redeploys — re-check and update this file each time.
+
+server {
+    listen 443 ssl;
+    server_name __DOMAIN__;
+
+    ssl_certificate /etc/nginx/ssl/certificate.crt;
+    ssl_certificate_key /etc/nginx/ssl/private.key;
+    ssl_dhparam /etc/nginx/ssl/dhparam.pem;
+
+    client_max_body_size 400M;
+
+    location / {
+        proxy_pass http://localhost:__BACKEND_PORT__;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_cache_bypass $http_upgrade;
+    }
+}
+
+server {
+    listen 80;
+    server_name __DOMAIN__;
+    return 301 https://$server_name$request_uri;
+}

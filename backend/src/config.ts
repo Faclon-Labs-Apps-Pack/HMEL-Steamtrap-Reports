@@ -80,25 +80,60 @@ function dailyTimeToCron(time: string): string {
 }
 
 /**
+ * Converts a day-of-month (1-28) + plain 24-hour "HH:MM" into a monthly cron expression
+ * ("M H D * *"). Capped at 28 (not 31) so it fires reliably every single month regardless of
+ * February or 30-day months — a date like 30 would silently skip February entirely.
+ */
+function monthlyDateTimeToCron(day: string, time: string): string {
+  const dayNum = Number(day);
+  if (!Number.isInteger(dayNum) || dayNum < 1 || dayNum > 28) {
+    throw new Error(
+      `Invalid MONTHLY_REPORT_DATE "${day}" — expected an integer from 1 to 28 (capped at 28 so it exists in every month, including February).`,
+    );
+  }
+  const match = /^([01]?\d|2[0-3]):([0-5]\d)$/.exec(time.trim());
+  if (!match) {
+    throw new Error(`Invalid MONTHLY_REPORT_TIME "${time}" — expected 24-hour HH:MM, e.g. 06:00.`);
+  }
+  const [, hour, minute] = match;
+  return `${Number(minute)} ${Number(hour)} ${dayNum} * *`;
+}
+
+/**
  * Lazy on purpose — the one-shot `npm run generate` command doesn't need scheduling/email
  * config at all, only the scheduler daemon does. Eagerly reading these at module load would
  * make `generate` require env vars it has no use for.
  */
-export function getReportScheduleConfig(report: 'management' | 'daily'): ReportScheduleConfig {
-  if (report === 'daily') {
-    // Daily report has no day-of-week component, so a plain time is enough — DAILY_REPORT_TIME
-    // is preferred; DAILY_REPORT_CRON still works for anyone who wants a raw cron expression.
-    const time = process.env.DAILY_REPORT_TIME;
-    return {
-      cron: time ? dailyTimeToCron(time) : requireEnv('DAILY_REPORT_CRON'),
-      recipients: parseRecipients('DAILY_REPORT_RECIPIENTS'),
-    };
+export function getReportScheduleConfig(report: 'management' | 'daily' | 'monthly'): ReportScheduleConfig {
+  switch (report) {
+    case 'daily': {
+      // Daily report has no day-of-week component, so a plain time is enough — DAILY_REPORT_TIME
+      // is preferred; DAILY_REPORT_CRON still works for anyone who wants a raw cron expression.
+      const time = process.env.DAILY_REPORT_TIME;
+      return {
+        cron: time ? dailyTimeToCron(time) : requireEnv('DAILY_REPORT_CRON'),
+        recipients: parseRecipients('DAILY_REPORT_RECIPIENTS'),
+      };
+    }
+    case 'monthly': {
+      // Monthly report needs a day-of-month + time — MONTHLY_REPORT_DATE + MONTHLY_REPORT_TIME
+      // are preferred; MONTHLY_REPORT_CRON still works for anyone who wants a raw cron expression
+      // (e.g. to express something monthlyDateTimeToCron can't, like "last day of the month").
+      const day = process.env.MONTHLY_REPORT_DATE;
+      const time = process.env.MONTHLY_REPORT_TIME;
+      return {
+        cron: day && time ? monthlyDateTimeToCron(day, time) : requireEnv('MONTHLY_REPORT_CRON'),
+        recipients: parseRecipients('MONTHLY_REPORT_RECIPIENTS'),
+      };
+    }
+    case 'management':
+    default:
+      // Management report is weekly, so it needs a day-of-week too — cron only.
+      return {
+        cron: requireEnv('MANAGEMENT_REPORT_CRON'),
+        recipients: parseRecipients('MANAGEMENT_REPORT_RECIPIENTS'),
+      };
   }
-  // Management report is weekly, so it needs a day-of-week too — cron only.
-  return {
-    cron: requireEnv('MANAGEMENT_REPORT_CRON'),
-    recipients: parseRecipients('MANAGEMENT_REPORT_RECIPIENTS'),
-  };
 }
 
 /**

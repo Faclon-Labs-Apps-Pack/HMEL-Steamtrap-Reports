@@ -1,6 +1,7 @@
 import { OUTPUT_DIR } from './config';
 import { generateManagementReportWorkbook } from './reportGeneration/generateManagementReport';
 import { generateDailyReportWorkbook } from './reportGeneration/generateDailyReport';
+import { generateMonthlyReportWorkbook } from './reportGeneration/generateMonthlyReport';
 import { saveWorkbook } from './reportGeneration/saveWorkbook';
 
 function dateStamp(): string {
@@ -21,14 +22,23 @@ async function runDaily(): Promise<void> {
   console.log(`[daily] Saved to ${filePath}`);
 }
 
+async function runMonthly(): Promise<void> {
+  console.log('[monthly] Generating…');
+  const workbook = await generateMonthlyReportWorkbook((p) => console.log(`[monthly] ${p.label}`));
+  const filePath = await saveWorkbook(workbook, OUTPUT_DIR, `Steam-Trap-Monthly-Report_${dateStamp()}.xlsx`);
+  console.log(`[monthly] Saved to ${filePath}`);
+}
+
 async function main() {
   const args = process.argv.slice(2);
   const onlyManagement = args.includes('--management');
   const onlyDaily = args.includes('--daily');
-  const runBoth = !onlyManagement && !onlyDaily;
+  const onlyMonthly = args.includes('--monthly');
+  const runAll = !onlyManagement && !onlyDaily && !onlyMonthly;
 
-  if (runBoth || onlyManagement) await runManagement();
-  if (runBoth || onlyDaily) await runDaily();
+  if (runAll || onlyManagement) await runManagement();
+  if (runAll || onlyDaily) await runDaily();
+  if (runAll || onlyMonthly) await runMonthly();
 }
 
 main().catch((err) => {
