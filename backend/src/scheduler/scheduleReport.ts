@@ -3,6 +3,26 @@ import { REPORT_TIMEZONE, REPORT_LEAD_TIME_MINUTES } from '../config';
 
 const LEAD_TIME_MS = REPORT_LEAD_TIME_MINUTES * 60 * 1000;
 
+// Node/browser setTimeout silently clamps any delay over 2^31-1 ms (~24.86 days) to fire almost
+// immediately, instead of waiting the full requested time or throwing an error. Daily (≤1 day)
+// and weekly (≤7 days) schedules never hit this; monthly (~28-31 days) always does — this was
+// the exact cause of a real incident where the monthly scheduler correctly computed each next
+// occurrence one month ahead, but then fired instantly instead of waiting, in a tight loop.
+const MAX_SAFE_TIMEOUT_MS = 2_147_483_647;
+
+/**
+ * setTimeout, but safe for delays longer than Node's ~24.86-day ceiling — chains multiple
+ * setTimeout calls, each capped at the safe maximum, recursively counting down the remainder,
+ * until the final leg is short enough to actually fire the callback.
+ */
+export function longSetTimeout(callback: () => void, delayMs: number): void {
+  if (delayMs <= MAX_SAFE_TIMEOUT_MS) {
+    setTimeout(callback, Math.max(0, delayMs));
+    return;
+  }
+  setTimeout(() => longSetTimeout(callback, delayMs - MAX_SAFE_TIMEOUT_MS), MAX_SAFE_TIMEOUT_MS);
+}
+
 /**
  * The cron expression's next actual fire instant strictly after `after`. Interpreted in
  * REPORT_TIMEZONE (IST by default), not the server's own local timezone — so `.env` values match
@@ -51,7 +71,7 @@ export function scheduleReport<T>(
         `(in ${Math.round(generateDelayMs / 60000)} min)`,
     );
 
-    setTimeout(async () => {
+    longSetTimeout(async () => {
       console.log(`[scheduler:${name}] Generating…`);
       let payload: T;
       try {
@@ -65,7 +85,7 @@ export function scheduleReport<T>(
       const sendDelayMs = Math.max(0, occurrence.getTime() - Date.now());
       console.log(`[scheduler:${name}] Report ready — sending at ${occurrence.toISOString()} (in ${Math.round(sendDelayMs / 60000)} min)`);
 
-      setTimeout(async () => {
+      longSetTimeout(async () => {
         console.log(`[scheduler:${name}] Sending…`);
         try {
           await send(payload);

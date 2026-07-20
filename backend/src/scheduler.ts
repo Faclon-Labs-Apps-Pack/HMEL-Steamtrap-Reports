@@ -2,7 +2,7 @@ import path from 'node:path';
 import { stat } from 'node:fs/promises';
 import { getReportScheduleConfig, getReportBaseUrl, OUTPUT_DIR } from './config';
 import { startFileServer } from './fileServer';
-import { scheduleReport } from './scheduler/scheduleReport';
+import { scheduleReport, longSetTimeout } from './scheduler/scheduleReport';
 import { addPendingEmail, removePendingEmail, getPendingEmails, type PendingEmail } from './scheduler/pendingEmails';
 import { sendReportEmail } from './email/sendReportEmail';
 import { saveWorkbook } from './reportGeneration/saveWorkbook';
@@ -152,7 +152,7 @@ async function recoverPendingEmails(): Promise<void> {
     } else {
       console.log(`[scheduler] Recovering pending email ${entry.fileName} — sending at ${entry.sendAt} (in ${Math.round(delayMs / 60000)} min).`);
     }
-    setTimeout(async () => {
+    longSetTimeout(async () => {
       try {
         await sendPending(entry);
         console.log(`[scheduler] Recovered send complete for ${entry.fileName}.`);
