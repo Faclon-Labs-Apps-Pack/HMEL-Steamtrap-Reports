@@ -6,21 +6,44 @@ import { getCorrectiveActions } from '../services/correctiveActionApi';
 import { getFeedbackCountsByDevice } from '../services/feedbackApi';
 import { getTimeSeriesStatsByDevice } from '../services/deviceTimeSeriesStats';
 import { getDevicePropertiesByDevice } from '../services/devicePropertiesApi';
-import { getSteamLossByDevice, getSteamSavingByDevice } from '../services/steamConsumptionApi';
+import { getSteamLossByDevice, getSteamSavingByDevice, getSteamConsumptionTotal } from '../services/steamConsumptionApi';
+import { extractDepartmentFromTags } from '../lib/departmentTag';
+import { derivePlantCategory, UNASSIGNED } from '../lib/plantCategory';
 import { segregateByUnit } from '../lib/segregateByUnit';
 import { buildCorrectiveActionCountByDevice, segregateCorrectiveActionsAndChanges } from '../lib/segregateCorrectiveActions';
-import { buildDeviceDetailRows, type DeviceDetailRow } from '../lib/buildDeviceDetailRows';
+import { buildDeviceDetailRows } from '../lib/buildDeviceDetailRows';
 import { buildCorrectiveActionLogRows } from '../lib/buildCorrectiveActionLogRows';
 import { getLastWeekRange, normalizeDateRange, toEpochMs } from '../lib/dateRange';
 import { buildOverviewSheet, type SteamKpiTotals } from './buildOverviewSheet';
+import type { Device } from '../types/device';
 import { buildDetailSheet } from './buildDetailSheet';
 import { buildCorrectiveActionLogSheet } from './buildCorrectiveActionLogSheet';
 
 const STEAM_TRAP_DEVICE_TYPE = 'steam trap';
 const STATUS_SENSOR = 'S1';
+const STEAM_LOSS_SENSOR = 'D11';
+const STEAM_SAVING_SENSOR = 'D12';
+/** Hardcoded per explicit request — matches the "Cost of Steam (Rs)" row shown in the overview sheet. */
+const COST_OF_STEAM_PER_TON = 2473;
 
 export interface ManagementReportProgress {
   label: string;
+}
+
+/** Builds the section KPI totals from single batched loss/saving figures (× the hardcoded cost of steam for INR). */
+function sectionKpis(steamLossMT: number, steamSavingMT: number): SteamKpiTotals {
+  return {
+    steamLossMT,
+    lossINR: steamLossMT * COST_OF_STEAM_PER_TON,
+    steamSavingMT,
+    savingsINR: steamSavingMT * COST_OF_STEAM_PER_TON,
+  };
+}
+
+function devicesInCategory(devices: Device[], plantCategory: string): Device[] {
+  return devices.filter(
+    (d) => derivePlantCategory(extractDepartmentFromTags(d.tags) ?? UNASSIGNED) === plantCategory,
+  );
 }
 
 /**
@@ -70,6 +93,20 @@ export async function generateManagementReportWorkbook(
   report(`Loading steam saving for ${devices.length} devices…`);
   const steamSavingByDevID = await getSteamSavingByDevice(devices, startMs, endMs);
 
+  // Section-level steam KPI: ONE batched call per plant-category section (all devices at once)
+  // for loss (D11) and saving (D12) — matches the dashboard's batched figure, which is NOT the
+  // per-device sum. Only the overview sheets use these; per-device detail columns above still
+  // come from the per-device calls.
+  report('Loading section steam loss/saving totals…');
+  const refineryDevices = devicesInCategory(devices, 'Refinery');
+  const petchemDevices = devicesInCategory(devices, 'Petchem');
+  const [refineryLossMT, refinerySavingMT, petchemLossMT, petchemSavingMT] = await Promise.all([
+    getSteamConsumptionTotal(refineryDevices, STEAM_LOSS_SENSOR, startMs, endMs),
+    getSteamConsumptionTotal(refineryDevices, STEAM_SAVING_SENSOR, startMs, endMs),
+    getSteamConsumptionTotal(petchemDevices, STEAM_LOSS_SENSOR, startMs, endMs),
+    getSteamConsumptionTotal(petchemDevices, STEAM_SAVING_SENSOR, startMs, endMs),
+  ]);
+
   report('Assembling report…');
   const matrix = segregateByUnit(devices, lastDPs);
   const correctiveActionCountByDevID = buildCorrectiveActionCountByDevice(lastWeekRecords);
@@ -96,13 +133,6 @@ export async function generateManagementReportWorkbook(
   const petchemRows = detailRows.filter((r) => r.plantCategory === 'Petchem');
   const logRows = buildCorrectiveActionLogRows(lastWeekRecords, devices);
 
-  const steamKpisFor = (rows: DeviceDetailRow[]): SteamKpiTotals => ({
-    steamLossMT: rows.reduce((sum, r) => sum + r.steamLossMT, 0),
-    lossINR: rows.reduce((sum, r) => sum + (r.lossINR ?? 0), 0),
-    steamSavingMT: rows.reduce((sum, r) => sum + r.steamSavingMT, 0),
-    savingsINR: rows.reduce((sum, r) => sum + (r.savingsINR ?? 0), 0),
-  });
-
   const workbook = new Workbook();
   workbook.creator = 'HMEL Steamtrap Reports';
   workbook.created = generatedAt;
@@ -114,7 +144,7 @@ export async function generateManagementReportWorkbook(
     generatedAt,
     matrix,
     correctiveActionMatrix,
-    steamKpisFor(refineryRows),
+    sectionKpis(refineryLossMT, refinerySavingMT),
   );
   buildOverviewSheet(
     workbook.addWorksheet('SteamtrapStatusOverview-petchem'),
@@ -123,7 +153,7 @@ export async function generateManagementReportWorkbook(
     generatedAt,
     matrix,
     correctiveActionMatrix,
-    steamKpisFor(petchemRows),
+    sectionKpis(petchemLossMT, petchemSavingMT),
   );
   buildDetailSheet(workbook.addWorksheet('Refinery'), refineryRows);
   buildDetailSheet(workbook.addWorksheet('Petchem'), petchemRows);
