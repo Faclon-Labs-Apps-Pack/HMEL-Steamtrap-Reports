@@ -8,11 +8,11 @@ function dateStamp(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-async function runManagement(): Promise<void> {
-  console.log('[management] Generating…');
-  const workbook = await generateManagementReportWorkbook((p) => console.log(`[management] ${p.label}`));
-  const filePath = await saveWorkbook(workbook, OUTPUT_DIR, `Steam-Trap-Management-Report_${dateStamp()}.xlsx`);
-  console.log(`[management] Saved to ${filePath}`);
+async function runWeekly(): Promise<void> {
+  console.log('[weekly] Generating…');
+  const workbook = await generateManagementReportWorkbook((p) => console.log(`[weekly] ${p.label}`));
+  const filePath = await saveWorkbook(workbook, OUTPUT_DIR, `Steam-Trap-Weekly-Report_${dateStamp()}.xlsx`);
+  console.log(`[weekly] Saved to ${filePath}`);
 }
 
 async function runDaily(): Promise<void> {
@@ -31,12 +31,12 @@ async function runMonthly(): Promise<void> {
 
 async function main() {
   const args = process.argv.slice(2);
-  const onlyManagement = args.includes('--management');
+  const onlyWeekly = args.includes('--weekly');
   const onlyDaily = args.includes('--daily');
   const onlyMonthly = args.includes('--monthly');
-  const runAll = !onlyManagement && !onlyDaily && !onlyMonthly;
+  const runAll = !onlyWeekly && !onlyDaily && !onlyMonthly;
 
-  if (runAll || onlyManagement) await runManagement();
+  if (runAll || onlyWeekly) await runWeekly();
   if (runAll || onlyDaily) await runDaily();
   if (runAll || onlyMonthly) await runMonthly();
 }

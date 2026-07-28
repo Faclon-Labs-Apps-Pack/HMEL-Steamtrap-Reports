@@ -1,7 +1,7 @@
 # Backend — Automated Report Generation & Email
 
 Standalone Node service that generates the same Excel reports as the frontend's
-"Generate Management Report" / "Generate Daily Report" / "Generate Monthly Report" buttons, but
+"Generate Weekly Report" / "Generate Daily Report" / "Generate Monthly Report" buttons, but
 automatically — on a schedule, emailed to configured recipients, no browser or manual click
 involved.
 
@@ -17,8 +17,11 @@ cp .env.example .env
 
 Fill in `.env`:
 - `IOSENSE_PAT`, `IOSENSE_ORG_ID` — from an IOsense admin.
-- `MANAGEMENT_REPORT_CRON` — cron expression for when the (weekly) Management Report should be
-  **ready**, e.g. `0 6 * * 1` for Monday 6:00 AM. Needs a day-of-week, so it's cron-only.
+- `WEEKLY_REPORT_DAY` + `WEEKLY_REPORT_TIME` — day-of-week (a number `1`-`7` where `1`=Monday …
+  `7`=Sunday, or a day name like `Monday`/`Mon`) + plain 24-hour `HH:MM` for when the Weekly
+  Report should be ready, e.g. `WEEKLY_REPORT_DAY=1`, `WEEKLY_REPORT_TIME=06:00` for Monday
+  6:00 AM. Raw cron also works via `WEEKLY_REPORT_CRON` (e.g. `0 6 * * 1`) — leave
+  `WEEKLY_REPORT_DAY`/`WEEKLY_REPORT_TIME` blank to use it.
 - `DAILY_REPORT_TIME` — plain 24-hour `HH:MM` for when the Daily Report should be ready, e.g.
   `06:00`. No cron syntax needed since it has no day-of-week. (If you'd rather use a raw cron
   expression here too — e.g. to skip weekends — set `DAILY_REPORT_CRON` instead and leave
@@ -34,11 +37,11 @@ Fill in `.env`:
 - `MONTHLY_REPORT_DATE` + `MONTHLY_REPORT_TIME` — day-of-month (`1`-`28`, capped so it exists in
   every month) + plain 24-hour `HH:MM` for when the Monthly Report should be ready, e.g.
   `MONTHLY_REPORT_DATE=1`, `MONTHLY_REPORT_TIME=06:00` for the 1st of every month at 6:00 AM. Same
-  exact 5-sheet template as the Management Report — the only difference is the time window (last
+  exact 5-sheet template as the Weekly Report — the only difference is the time window (last
   fully-completed calendar month instead of last fully-completed week). Raw cron also works via
   `MONTHLY_REPORT_CRON` (e.g. for "last day of the month", which a plain day-of-month can't
   express) — leave `MONTHLY_REPORT_DATE`/`MONTHLY_REPORT_TIME` blank to use it.
-- `MANAGEMENT_REPORT_RECIPIENTS`, `DAILY_REPORT_RECIPIENTS`, `MONTHLY_REPORT_RECIPIENTS` —
+- `WEEKLY_REPORT_RECIPIENTS`, `DAILY_REPORT_RECIPIENTS`, `MONTHLY_REPORT_RECIPIENTS` —
   comma-separated email addresses.
 - `REPORT_BASE_URL` — **must be a publicly reachable URL**, not localhost. See "Email delivery"
   below for why this is non-negotiable.
@@ -48,7 +51,7 @@ Fill in `.env`:
 **One-shot, manual/externally-scheduled** (no email, no `.env` scheduling/recipient vars needed):
 ```bash
 npm run generate              # all three reports, written to output/
-npm run generate:management
+npm run generate:weekly
 npm run generate:daily
 npm run generate:monthly
 ```

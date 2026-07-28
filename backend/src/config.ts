@@ -19,7 +19,7 @@ export function getOrgId(): string {
   return requireEnv('IOSENSE_ORG_ID');
 }
 
-// The values you put in MANAGEMENT_REPORT_CRON / DAILY_REPORT_TIME are meant as IST wall-clock
+// The schedule values you put in .env (WEEKLY_REPORT_TIME / DAILY_REPORT_TIME etc.) are meant as IST wall-clock
 // times regardless of what timezone the server itself boots in (many VMs default to UTC, which
 // is 5.5 hours behind IST — without this, "20:20" in .env would fire at 20:20 UTC = 01:50 IST).
 export const REPORT_TIMEZONE = process.env.REPORT_TIMEZONE ?? 'Asia/Kolkata';
@@ -99,12 +99,49 @@ function monthlyDateTimeToCron(day: string, time: string): string {
   return `${Number(minute)} ${Number(hour)} ${dayNum} * *`;
 }
 
+const DAY_OF_WEEK: Record<string, number> = {
+  sun: 0, sunday: 0,
+  mon: 1, monday: 1,
+  tue: 2, tuesday: 2,
+  wed: 3, wednesday: 3,
+  thu: 4, thursday: 4,
+  fri: 5, friday: 5,
+  sat: 6, saturday: 6,
+};
+
+/**
+ * Converts a weekday (ISO number 1-7 where 1=Monday … 7=Sunday, OR a name like "Monday"/"Mon",
+ * case-insensitive) + plain 24-hour "HH:MM" into a weekly cron expression ("M H * * D"). The
+ * cron day-of-week field is 0-6 (Sunday=0), so ISO 7 (Sunday) maps to cron 0.
+ */
+function weeklyDayTimeToCron(day: string, time: string): string {
+  const trimmed = day.trim();
+  let dow: number | undefined;
+  if (/^\d+$/.test(trimmed)) {
+    const iso = Number(trimmed); // ISO 8601: 1=Monday … 7=Sunday
+    if (iso >= 1 && iso <= 7) dow = iso === 7 ? 0 : iso; // cron day-of-week: Sunday=0
+  } else {
+    dow = DAY_OF_WEEK[trimmed.toLowerCase()];
+  }
+  if (dow === undefined) {
+    throw new Error(
+      `Invalid WEEKLY_REPORT_DAY "${day}" — expected 1-7 (1=Monday … 7=Sunday) or a weekday name like Monday (or Mon).`,
+    );
+  }
+  const match = /^([01]?\d|2[0-3]):([0-5]\d)$/.exec(time.trim());
+  if (!match) {
+    throw new Error(`Invalid WEEKLY_REPORT_TIME "${time}" — expected 24-hour HH:MM, e.g. 06:00.`);
+  }
+  const [, hour, minute] = match;
+  return `${Number(minute)} ${Number(hour)} * * ${dow}`;
+}
+
 /**
  * Lazy on purpose — the one-shot `npm run generate` command doesn't need scheduling/email
  * config at all, only the scheduler daemon does. Eagerly reading these at module load would
  * make `generate` require env vars it has no use for.
  */
-export function getReportScheduleConfig(report: 'management' | 'daily' | 'monthly'): ReportScheduleConfig {
+export function getReportScheduleConfig(report: 'weekly' | 'daily' | 'monthly'): ReportScheduleConfig {
   switch (report) {
     case 'daily': {
       // Daily report has no day-of-week component, so a plain time is enough — DAILY_REPORT_TIME
@@ -126,13 +163,17 @@ export function getReportScheduleConfig(report: 'management' | 'daily' | 'monthl
         recipients: parseRecipients('MONTHLY_REPORT_RECIPIENTS'),
       };
     }
-    case 'management':
-    default:
-      // Management report is weekly, so it needs a day-of-week too — cron only.
+    case 'weekly':
+    default: {
+      // Weekly report needs a day-of-week + time — WEEKLY_REPORT_DAY + WEEKLY_REPORT_TIME are
+      // preferred; WEEKLY_REPORT_CRON still works for anyone who wants a raw cron expression.
+      const day = process.env.WEEKLY_REPORT_DAY;
+      const time = process.env.WEEKLY_REPORT_TIME;
       return {
-        cron: requireEnv('MANAGEMENT_REPORT_CRON'),
-        recipients: parseRecipients('MANAGEMENT_REPORT_RECIPIENTS'),
+        cron: day && time ? weeklyDayTimeToCron(day, time) : requireEnv('WEEKLY_REPORT_CRON'),
+        recipients: parseRecipients('WEEKLY_REPORT_RECIPIENTS'),
       };
+    }
   }
 }
 

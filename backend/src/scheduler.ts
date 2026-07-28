@@ -18,22 +18,22 @@ function formattedDate(): string {
   return new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'numeric', year: 'numeric' });
 }
 
-async function generateManagement(occurrence: Date): Promise<PendingEmail> {
-  const { recipients } = getReportScheduleConfig('management');
-  const workbook = await generateManagementReportWorkbook((p) => console.log(`[management] ${p.label}`));
-  const fileName = `Steam-Trap-Management-Report_${dateStamp()}.xlsx`;
+async function generateWeekly(occurrence: Date): Promise<PendingEmail> {
+  const { recipients } = getReportScheduleConfig('weekly');
+  const workbook = await generateManagementReportWorkbook((p) => console.log(`[weekly] ${p.label}`));
+  const fileName = `Steam-Trap-Weekly-Report_${dateStamp()}.xlsx`;
   await saveWorkbook(workbook, OUTPUT_DIR, fileName);
 
   const pending: PendingEmail = {
-    reportType: 'management',
+    reportType: 'weekly',
     fileName,
     downloadUrl: `${getReportBaseUrl()}/report/${fileName}`,
     recipients,
-    subject: `[HMEL Management Report] Automated Report - ${formattedDate()}`,
-    reportTitle: 'HMEL Steam Trap Management Report',
+    subject: `[HMEL Weekly Report] Automated Report - ${formattedDate()}`,
+    reportTitle: 'HMEL Steam Trap Weekly Report',
     message:
       'Dear Team,\n\n' +
-      'Your Steam Trap Management report has been generated successfully.\n\n' +
+      'Your Steam Trap Weekly report has been generated successfully.\n\n' +
       'Report includes:\n' +
       '1. Unit vs Trap Status by Plant Category (Refinery/Petchem)\n' +
       '2. Per-device detail for each category\n' +
@@ -167,11 +167,11 @@ async function main() {
   startFileServer();
   await recoverPendingEmails();
 
-  const management = getReportScheduleConfig('management');
+  const weekly = getReportScheduleConfig('weekly');
   const daily = getReportScheduleConfig('daily');
   const monthly = getReportScheduleConfig('monthly');
 
-  scheduleReport('management', management.cron, generateManagement, sendPending);
+  scheduleReport('weekly', weekly.cron, generateWeekly, sendPending);
   scheduleReport('daily', daily.cron, generateDaily, sendPending);
   scheduleReport('monthly', monthly.cron, generateMonthly, sendPending);
 
