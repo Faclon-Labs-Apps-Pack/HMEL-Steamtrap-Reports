@@ -1,4 +1,5 @@
 import { getAuthHeader, getOrgId, API_BASE } from '../config';
+import { runWithConcurrencyLimit } from '../lib/concurrency';
 import type { Device, LastDataPoint } from '../types/device';
 
 export class ApiError extends Error {}
@@ -105,18 +106,48 @@ interface GetAutoDownSampledResponse {
 }
 
 /**
- * Fetches time-series for MANY (devID, sensor) pairs in a single request. Use this instead of
- * looping a single-pair endpoint per device — one HTTP call instead of N, which matters a lot
- * at ~200 steam trap devices.
+ * The getAutoDownSampledData endpoint rejects large device lists (confirmed live — a ~285-device
+ * request failed while the same token worked for every other endpoint; the reference project
+ * that first used this endpoint chunks it in small batches for the same reason). So we split into
+ * batches of this many (devID, sensor) pairs and merge the results.
  */
-export async function getBulkDeviceTimeSeries(
+const BULK_TIME_SERIES_BATCH_SIZE = 20;
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Fetches one batch with retry + exponential backoff. The getAutoDownSampledData endpoint
+ * intermittently returns HTTP 200 `{"success":false}` under load — confirmed live: a batch that
+ * failed then succeeded on immediate retry, and its devices all succeeded individually. It's a
+ * transient rate-limit, not bad data, so retrying recovers it. (The scheduler firing all three
+ * reports at once multiplies the load, which is why this surfaced.)
+ */
+async function fetchBulkTimeSeriesBatchWithRetry(
   pairs: { devID: string; sensor: string }[],
   startMs: number,
   endMs: number,
-  downscale = 2000,
+  downscale: number,
+  attempts = 5,
 ): Promise<Map<string, TimeSeriesPoint[]>> {
-  if (pairs.length === 0) return new Map();
+  let lastError: unknown;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      return await fetchBulkTimeSeriesBatch(pairs, startMs, endMs, downscale);
+    } catch (err) {
+      lastError = err;
+      if (attempt < attempts - 1) await sleep(500 * 2 ** attempt); // 0.5s, 1s, 2s, 4s
+    }
+  }
+  throw lastError;
+}
 
+/** Fetches one batch of (devID, sensor) pairs from getAutoDownSampledData. */
+async function fetchBulkTimeSeriesBatch(
+  pairs: { devID: string; sensor: string }[],
+  startMs: number,
+  endMs: number,
+  downscale: number,
+): Promise<Map<string, TimeSeriesPoint[]>> {
   const response = await fetch(`${API_BASE}/account/widget/getAutoDownSampledData`, {
     method: 'PUT',
     headers: authHeaders(),
@@ -125,9 +156,17 @@ export async function getBulkDeviceTimeSeries(
     }),
   });
 
-  const body = (await response.json()) as GetAutoDownSampledResponse;
+  const rawText = await response.text();
+  let body: GetAutoDownSampledResponse;
+  try {
+    body = JSON.parse(rawText) as GetAutoDownSampledResponse;
+  } catch {
+    throw new ApiError(`Failed to fetch bulk time series from IOsense (HTTP ${response.status}, non-JSON): ${rawText.slice(0, 300)}`);
+  }
   if (!response.ok || !body.success) {
-    throw new ApiError('Failed to fetch bulk time series from IOsense.');
+    throw new ApiError(
+      `Failed to fetch bulk time series from IOsense (HTTP ${response.status}, ${pairs.length} pairs): ${rawText.slice(0, 300)}`,
+    );
   }
 
   const result = new Map<string, TimeSeriesPoint[]>();
@@ -138,6 +177,38 @@ export async function getBulkDeviceTimeSeries(
     result.set(entry.devID, points);
   }
   return result;
+}
+
+/**
+ * Fetches time-series for MANY (devID, sensor) pairs. Splits into batches (the endpoint rejects
+ * large lists — see BULK_TIME_SERIES_BATCH_SIZE) and runs them concurrency-limited, merging into
+ * one map. Still far fewer HTTP calls than one-per-device, but small enough per call that the
+ * endpoint accepts them.
+ */
+export async function getBulkDeviceTimeSeries(
+  pairs: { devID: string; sensor: string }[],
+  startMs: number,
+  endMs: number,
+  downscale = 2000,
+): Promise<Map<string, TimeSeriesPoint[]>> {
+  if (pairs.length === 0) return new Map();
+
+  const batches: { devID: string; sensor: string }[][] = [];
+  for (let i = 0; i < pairs.length; i += BULK_TIME_SERIES_BATCH_SIZE) {
+    batches.push(pairs.slice(i, i + BULK_TIME_SERIES_BATCH_SIZE));
+  }
+
+  // Low concurrency (2) + per-batch retry keeps the total request rate gentle enough that the
+  // endpoint's intermittent under-load failures recover instead of failing the whole report.
+  const batchResults = await runWithConcurrencyLimit(batches, 2, (batch) =>
+    fetchBulkTimeSeriesBatchWithRetry(batch, startMs, endMs, downscale),
+  );
+
+  const merged = new Map<string, TimeSeriesPoint[]>();
+  for (const batchResult of batchResults) {
+    for (const [devID, points] of batchResult) merged.set(devID, points);
+  }
+  return merged;
 }
 
 export interface DeviceProperty {
