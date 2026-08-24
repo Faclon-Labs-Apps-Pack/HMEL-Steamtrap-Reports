@@ -104,3 +104,6 @@ temp/
 
 # Reference-only clones (never commit)
 reference/
+
+# Local dev credentials — never commit
+creds
