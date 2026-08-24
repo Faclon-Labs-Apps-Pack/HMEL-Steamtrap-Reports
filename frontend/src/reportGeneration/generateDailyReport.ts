@@ -3,7 +3,6 @@ import { collectDailyReportData, type DailyReportProgress } from './collectDaily
 import { buildDailySummarySheet, type SummaryWindowValues } from './buildDailySummarySheet';
 import { buildDailyAnalysisSheet } from './buildDailyAnalysisSheet';
 import { buildDailyLiveStatusSheet } from './buildDailyLiveStatusSheet';
-import { classifyStatus, STATUS_COLUMNS, type StatusColumn } from '../lib/statusClassification';
 import { derivePlantCategory } from '../lib/plantCategory';
 import { dailyReportFileName } from '../lib/reportNaming';
 import { HMEL_LOGO_BASE64 } from './hmelLogo';
@@ -120,9 +119,6 @@ export async function generateDailyReportWorkbooks(
     const unitDevices = data.devices.filter((d) => unitDevIDs.has(d.devID));
     const unitDevIDList = [...unitDevIDs];
 
-    const statusCounts = Object.fromEntries(STATUS_COLUMNS.map((c) => [c, 0])) as Record<StatusColumn, number>;
-    for (const r of analysisRows) statusCounts[classifyStatus(r.currentStatus)] += 1;
-
     report(`Loading WTD/MTD/YTD steam loss/saving for ${unitName}…`);
     const [[wtdLoss, wtdSave], [mtdLoss, mtdSave], [ytdLoss, ytdSave]] = await Promise.all([
       windowSteam(unitDevices, wtdRange),
@@ -160,7 +156,7 @@ export async function generateDailyReportWorkbooks(
       unitName,
       derivePlantCategory(unitName),
       unitDevices,
-      statusCounts,
+      data.lastDPs,
       data.range,
       data.generatedAt,
       analysisRows.reduce((sum, r) => sum + r.correctiveActionCount, 0),

@@ -13,7 +13,7 @@ import {
 } from '../lib/buildDailyReportRows';
 import { getTodayRange, normalizeDateRange, toEpochMs, type DateRange } from '../lib/dateRange';
 import { classifyStatus, STATUS_COLUMNS, type StatusColumn } from '../lib/statusClassification';
-import type { Device } from '../types/device';
+import type { Device, LastDataPoint } from '../types/device';
 
 const STEAM_TRAP_DEVICE_TYPE = 'steam trap';
 const STATUS_SENSOR = 'S1';
@@ -31,6 +31,7 @@ export interface DailyReportData {
   range: DateRange;
   generatedAt: Date;
   devices: Device[];
+  lastDPs: LastDataPoint[];
   statusCounts: Record<StatusColumn, number>;
   correctiveActionTotal: number;
   feedbackTotal: number;
@@ -122,6 +123,7 @@ export async function collectDailyReportData(
     range,
     generatedAt,
     devices,
+    lastDPs,
     statusCounts,
     correctiveActionTotal,
     feedbackTotal,
