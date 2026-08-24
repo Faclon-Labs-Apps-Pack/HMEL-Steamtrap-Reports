@@ -1,6 +1,6 @@
 import type { Worksheet } from 'exceljs';
 import type { DailyLiveStatusRow } from '../lib/buildDailyReportRows';
-import { ALL_BORDERS, HEADER_FILL, HEADER_FONT } from './xlsxStyles';
+import { ALL_BORDERS, BLUE_HEADER_FILL, HEADER_FONT, fitColumnWidths } from './xlsxStyles';
 
 const HEADERS = [
   'Sr No',
@@ -25,31 +25,36 @@ const HEADERS = [
  * plausible-sounding explanations would be actively misleading.
  */
 export function buildDailyLiveStatusSheet(sheet: Worksheet, rows: DailyLiveStatusRow[]): void {
-  sheet.columns = HEADERS.map((h) => ({ width: h === 'Location' ? 40 : Math.max(16, h.length + 2) }));
+  const LOCATION_COL = HEADERS.indexOf('Location');
+  const rowValues = rows.map((row) => [
+    row.srNo,
+    row.devID,
+    row.location,
+    row.department,
+    row.inletPressure,
+    row.outletPressure,
+    row.baseLineInletTemperature,
+    row.baseLineOutletTemperature,
+    row.liveInletTemperature,
+    row.liveOutletTemperature,
+    row.status,
+  ]);
+
+  // Size every column to its widest value (Location can grow further since descriptions are long).
+  sheet.columns = fitColumnWidths(HEADERS, rowValues, { min: 12, max: 34, maxByCol: { [LOCATION_COL]: 60 } });
+  sheet.views = [{ state: 'frozen', ySplit: 1 }];
 
   const headerRow = sheet.getRow(1);
   headerRow.values = HEADERS;
   headerRow.eachCell((cell) => {
     cell.font = HEADER_FONT;
-    cell.fill = HEADER_FILL;
+    cell.fill = BLUE_HEADER_FILL;
     cell.border = ALL_BORDERS;
   });
 
-  rows.forEach((row, i) => {
+  rowValues.forEach((values, i) => {
     const excelRow = sheet.getRow(i + 2);
-    excelRow.values = [
-      row.srNo,
-      row.devID,
-      row.location,
-      row.department,
-      row.inletPressure,
-      row.outletPressure,
-      row.baseLineInletTemperature,
-      row.baseLineOutletTemperature,
-      row.liveInletTemperature,
-      row.liveOutletTemperature,
-      row.status,
-    ];
+    excelRow.values = values;
     excelRow.eachCell((cell) => {
       cell.border = ALL_BORDERS;
     });

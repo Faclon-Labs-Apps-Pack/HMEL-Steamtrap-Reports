@@ -1,105 +1,128 @@
 import path from 'node:path';
 import { stat } from 'node:fs/promises';
-import { getReportScheduleConfig, getReportBaseUrl, OUTPUT_DIR } from './config';
+import {
+  getDailyRecipientsForUnit,
+  getWeeklyRecipientsForCategory,
+  getDailyUnitSchedules,
+  getDailyDefaultCron,
+  getWeeklyCategorySchedule,
+  getWeeklyDefaultCron,
+  getReportBaseUrl,
+  OUTPUT_DIR,
+} from './config';
 import { startFileServer } from './fileServer';
 import { scheduleReport, longSetTimeout } from './scheduler/scheduleReport';
 import { addPendingEmail, removePendingEmail, getPendingEmails, type PendingEmail } from './scheduler/pendingEmails';
 import { sendReportEmail } from './email/sendReportEmail';
 import { saveWorkbook } from './reportGeneration/saveWorkbook';
-import { generateManagementReportWorkbook } from './reportGeneration/generateManagementReport';
-import { generateDailyReportWorkbook } from './reportGeneration/generateDailyReport';
-import { generateMonthlyReportWorkbook } from './reportGeneration/generateMonthlyReport';
+import { generateManagementReportWorkbooks } from './reportGeneration/generateManagementReport';
+import { generateDailyReportWorkbooks } from './reportGeneration/generateDailyReport';
 
-function dateStamp(): string {
-  return new Date().toISOString().slice(0, 10);
+
+/**
+ * One report file (and one pending email) per plant category — see
+ * generateManagementReportWorkbooks. Each category's email goes to its own designated
+ * recipients (<CATEGORY>_WEEKLY_RECIPIENTS, falling back to the shared WEEKLY_REPORT_RECIPIENTS).
+ * `opts.categories` restricts which categories this run generates, so a category with its own
+ * <CATEGORY>_WEEKLY_DAY/TIME can be scheduled independently. The subject is the report/file name.
+ */
+async function generateWeekly(occurrence: Date, opts?: { categories?: string[] }): Promise<PendingEmail[]> {
+  const reports = await generateManagementReportWorkbooks((p) => console.log(`[weekly] ${p.label}`), opts);
+
+  const pendings: PendingEmail[] = [];
+  for (const { categoryName, reportName, fileName, workbook } of reports) {
+    await saveWorkbook(workbook, OUTPUT_DIR, fileName);
+
+    const recipients = getWeeklyRecipientsForCategory(categoryName);
+    if (recipients.length === 0) {
+      console.warn(
+        `[weekly] No recipients configured for ${categoryName} (set ${categoryName.toUpperCase()}_WEEKLY_RECIPIENTS or WEEKLY_REPORT_RECIPIENTS) — report saved but no email will be sent.`,
+      );
+      continue;
+    }
+
+    const pending: PendingEmail = {
+      reportType: 'weekly',
+      fileName,
+      downloadUrl: `${getReportBaseUrl()}/report/${encodeURIComponent(fileName)}`,
+      recipients,
+      subject: reportName,
+      reportTitle: 'Steam Trap Weekly Report',
+      message:
+        'Dear Team,\n\n' +
+        `Your Steam Trap Weekly report for ${categoryName} has been generated successfully.\n\n` +
+        'Report includes:\n' +
+        '1. Performance Indicators (trap health, steam loss/savings — WTD/MTD/YTD)\n' +
+        '2. Steam Trap Status by unit\n' +
+        '3. Corrective Actions by unit (WTD/MTD/YTD)\n\n' +
+        'Best Regards,\nHMEL Steam Trap Monitoring System',
+      generatedAt: new Date().toISOString(),
+      sendAt: occurrence.toISOString(),
+    };
+    await addPendingEmail(pending);
+    pendings.push(pending);
+  }
+  return pendings;
 }
 
-function formattedDate(): string {
-  return new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'numeric', year: 'numeric' });
+/**
+ * One report file (and one pending email) per unit — see generateDailyReportWorkbooks. Each
+ * unit's email goes to that unit's designated recipients (<UNIT>_DAILY_RECIPIENTS, falling back
+ * to the shared DAILY_REPORT_RECIPIENTS — see getDailyRecipientsForUnit). `opts` restricts which
+ * units this run generates, so a unit with its own <UNIT>_DAILY_TIME can be scheduled
+ * independently. The subject is the report/file name.
+ */
+async function generateDaily(
+  occurrence: Date,
+  opts?: { unitKeys?: string[]; excludeUnitKeys?: string[] },
+): Promise<PendingEmail[]> {
+  const reports = await generateDailyReportWorkbooks((p) => console.log(`[daily] ${p.label}`), opts);
+
+  const pendings: PendingEmail[] = [];
+  for (const { unitName, reportName, fileName, workbook } of reports) {
+    await saveWorkbook(workbook, OUTPUT_DIR, fileName);
+
+    const recipients = getDailyRecipientsForUnit(unitName);
+    if (recipients.length === 0) {
+      console.warn(
+        `[daily] No recipients configured for unit "${unitName}" (set DAILY_REPORT_RECIPIENTS_* or DAILY_REPORT_RECIPIENTS) — report saved but no email will be sent.`,
+      );
+      continue;
+    }
+
+    const pending: PendingEmail = {
+      reportType: 'daily',
+      fileName,
+      downloadUrl: `${getReportBaseUrl()}/report/${encodeURIComponent(fileName)}`,
+      recipients,
+      subject: reportName,
+      reportTitle: 'Steam Trap Daily Report',
+      message:
+        'Dear Team,\n\n' +
+        `Your Steam Trap Daily report for ${unitName} has been generated successfully.\n\n` +
+        'Report includes:\n' +
+        '1. Summary (status breakdown, aggregate counts)\n' +
+        '2. Analysis (per-device status/change/action detail)\n' +
+        '3. Live Status (pressure, temperature per device)\n\n' +
+        'Best Regards,\nHMEL Steam Trap Monitoring System',
+      generatedAt: new Date().toISOString(),
+      sendAt: occurrence.toISOString(),
+    };
+    await addPendingEmail(pending);
+    pendings.push(pending);
+  }
+  return pendings;
 }
 
-async function generateWeekly(occurrence: Date): Promise<PendingEmail> {
-  const { recipients } = getReportScheduleConfig('weekly');
-  const workbook = await generateManagementReportWorkbook((p) => console.log(`[weekly] ${p.label}`));
-  const fileName = `Steam-Trap-Weekly-Report_${dateStamp()}.xlsx`;
-  await saveWorkbook(workbook, OUTPUT_DIR, fileName);
-
-  const pending: PendingEmail = {
-    reportType: 'weekly',
-    fileName,
-    downloadUrl: `${getReportBaseUrl()}/report/${fileName}`,
-    recipients,
-    subject: `[HMEL Weekly Report] Automated Report - ${formattedDate()}`,
-    reportTitle: 'HMEL Steam Trap Weekly Report',
-    message:
-      'Dear Team,\n\n' +
-      'Your Steam Trap Weekly report has been generated successfully.\n\n' +
-      'Report includes:\n' +
-      '1. Unit vs Trap Status by Plant Category (Refinery/Petchem)\n' +
-      '2. Per-device detail for each category\n' +
-      '3. Corrective Action Log\n\n' +
-      'Best Regards,\nHMEL Steam Trap Monitoring System',
-    generatedAt: new Date().toISOString(),
-    sendAt: occurrence.toISOString(),
-  };
-  await addPendingEmail(pending);
-  return pending;
-}
-
-async function generateDaily(occurrence: Date): Promise<PendingEmail> {
-  const { recipients } = getReportScheduleConfig('daily');
-  const workbook = await generateDailyReportWorkbook((p) => console.log(`[daily] ${p.label}`));
-  const fileName = `Steam-Trap-Daily-Report_${dateStamp()}.xlsx`;
-  await saveWorkbook(workbook, OUTPUT_DIR, fileName);
-
-  const pending: PendingEmail = {
-    reportType: 'daily',
-    fileName,
-    downloadUrl: `${getReportBaseUrl()}/report/${fileName}`,
-    recipients,
-    subject: `[HMEL Daily Report] Automated Report - ${formattedDate()}`,
-    reportTitle: 'HMEL Steam Trap Daily Report',
-    message:
-      'Dear Team,\n\n' +
-      'Your Steam Trap Daily report has been generated successfully.\n\n' +
-      'Report includes:\n' +
-      '1. Summary (status breakdown, aggregate counts)\n' +
-      '2. Analysis (per-device status/change/action detail)\n' +
-      '3. Live Status (pressure, temperature per device)\n\n' +
-      'Best Regards,\nHMEL Steam Trap Monitoring System',
-    generatedAt: new Date().toISOString(),
-    sendAt: occurrence.toISOString(),
-  };
-  await addPendingEmail(pending);
-  return pending;
-}
-
-async function generateMonthly(occurrence: Date): Promise<PendingEmail> {
-  const { recipients } = getReportScheduleConfig('monthly');
-  const workbook = await generateMonthlyReportWorkbook((p) => console.log(`[monthly] ${p.label}`));
-  const fileName = `Steam-Trap-Monthly-Report_${dateStamp()}.xlsx`;
-  await saveWorkbook(workbook, OUTPUT_DIR, fileName);
-
-  const pending: PendingEmail = {
-    reportType: 'monthly',
-    fileName,
-    downloadUrl: `${getReportBaseUrl()}/report/${fileName}`,
-    recipients,
-    subject: `[HMEL Monthly Report] Automated Report - ${formattedDate()}`,
-    reportTitle: 'HMEL Steam Trap Monthly Report',
-    message:
-      'Dear Team,\n\n' +
-      'Your Steam Trap Monthly report has been generated successfully.\n\n' +
-      'Report includes:\n' +
-      '1. Unit vs Trap Status by Plant Category (Refinery/Petchem)\n' +
-      '2. Per-device detail for each category\n' +
-      '3. Corrective Action Log\n\n' +
-      'Best Regards,\nHMEL Steam Trap Monitoring System',
-    generatedAt: new Date().toISOString(),
-    sendAt: occurrence.toISOString(),
-  };
-  await addPendingEmail(pending);
-  return pending;
+/** Sends each unit's daily email independently — one unit failing doesn't block the others. */
+async function sendPendingList(pendings: PendingEmail[]): Promise<void> {
+  for (const pending of pendings) {
+    try {
+      await sendPending(pending);
+    } catch (err) {
+      console.error(`[sendPending] Send failed for ${pending.fileName} — continuing with the rest:`, err);
+    }
+  }
 }
 
 /**
@@ -163,17 +186,50 @@ async function recoverPendingEmails(): Promise<void> {
   }
 }
 
+/** The two client-defined weekly categories (each its own parent unit in the report). */
+const WEEKLY_CATEGORIES = ['Refinery', 'Petchem'];
+
 async function main() {
   startFileServer();
   await recoverPendingEmails();
 
-  const weekly = getReportScheduleConfig('weekly');
-  const daily = getReportScheduleConfig('daily');
-  const monthly = getReportScheduleConfig('monthly');
+  // --- Weekly: each category on its own <CATEGORY>_WEEKLY_DAY/TIME if set, else grouped under
+  // the shared WEEKLY_REPORT_DAY/TIME.
+  const weeklyDefaultCategories: string[] = [];
+  for (const category of WEEKLY_CATEGORIES) {
+    const sched = getWeeklyCategorySchedule(category);
+    if (sched) {
+      console.log(`[scheduler] Weekly ${category}: individual schedule (${sched.cron}).`);
+      scheduleReport(`weekly:${category}`, sched.cron, (occ) => generateWeekly(occ, { categories: [category] }), sendPendingList);
+    } else {
+      weeklyDefaultCategories.push(category);
+    }
+  }
+  const weeklyDefaultCron = getWeeklyDefaultCron();
+  if (weeklyDefaultCategories.length > 0 && weeklyDefaultCron) {
+    console.log(`[scheduler] Weekly ${weeklyDefaultCategories.join(', ')}: shared schedule (${weeklyDefaultCron}).`);
+    scheduleReport('weekly', weeklyDefaultCron, (occ) => generateWeekly(occ, { categories: weeklyDefaultCategories }), sendPendingList);
+  } else if (weeklyDefaultCategories.length > 0) {
+    console.warn(
+      `[scheduler] No weekly schedule for ${weeklyDefaultCategories.join(', ')} — set <CATEGORY>_WEEKLY_DAY/TIME or WEEKLY_REPORT_DAY/TIME.`,
+    );
+  }
 
-  scheduleReport('weekly', weekly.cron, generateWeekly, sendPending);
-  scheduleReport('daily', daily.cron, generateDaily, sendPending);
-  scheduleReport('monthly', monthly.cron, generateMonthly, sendPending);
+  // --- Daily: each unit with its own <UNIT>_DAILY_TIME is scheduled individually; every other
+  // unit is generated together by the shared DAILY_REPORT_TIME job.
+  const unitSchedules = getDailyUnitSchedules();
+  for (const s of unitSchedules) {
+    console.log(`[scheduler] Daily ${s.key}: individual schedule (${s.cron}).`);
+    scheduleReport(`daily:${s.key}`, s.cron, (occ) => generateDaily(occ, { unitKeys: [s.key] }), sendPendingList);
+  }
+  const dailyDefaultCron = getDailyDefaultCron();
+  if (dailyDefaultCron) {
+    const excludeUnitKeys = unitSchedules.map((s) => s.key);
+    console.log(`[scheduler] Daily (all other units): shared schedule (${dailyDefaultCron}).`);
+    scheduleReport('daily', dailyDefaultCron, (occ) => generateDaily(occ, { excludeUnitKeys }), sendPendingList);
+  } else if (unitSchedules.length === 0) {
+    console.warn('[scheduler] No daily schedule configured — set <UNIT>_DAILY_TIME or DAILY_REPORT_TIME.');
+  }
 
   console.log('[scheduler] Running. Press Ctrl+C to stop.');
 }

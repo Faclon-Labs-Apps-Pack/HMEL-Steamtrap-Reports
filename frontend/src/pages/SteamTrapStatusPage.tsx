@@ -10,9 +10,8 @@ import { SteamTrapStatusTable, type SteamTrapRow } from '../components/SteamTrap
 import { UnitTrapStatusMatrix } from '../components/UnitTrapStatusMatrix';
 import { CorrectiveActionMatrix } from '../components/CorrectiveActionMatrix';
 import { GenerateExcelReportButton } from '../components/GenerateExcelReportButton';
-import { generateManagementReportWorkbook } from '../reportGeneration/generateManagementReport';
-import { generateDailyReportWorkbook } from '../reportGeneration/generateDailyReport';
-import { generateMonthlyReportWorkbook } from '../reportGeneration/generateMonthlyReport';
+import { generateManagementReportWorkbooks } from '../reportGeneration/generateManagementReport';
+import { generateDailyReportWorkbooks } from '../reportGeneration/generateDailyReport';
 import { segregateByUnit } from '../lib/segregateByUnit';
 import { extractDepartmentFromTags } from '../lib/departmentTag';
 import { getCurrentWeekRange, normalizeDateRange, toEpochMs, type DateRange } from '../lib/dateRange';
@@ -148,18 +147,16 @@ export function SteamTrapStatusPage() {
         <div style={{ display: 'flex', gap: 'var(--spacing-03)' }}>
           <GenerateExcelReportButton
             idleLabel="Generate Management Report"
-            generate={generateManagementReportWorkbook}
-            filename={() => `Steam-Trap-Management-Report_${new Date().toISOString().slice(0, 10)}.xlsx`}
+            generate={async (onProgress) =>
+              (await generateManagementReportWorkbooks(onProgress)).map(({ workbook, fileName }) => ({
+                workbook,
+                fileName,
+              }))
+            }
           />
           <GenerateExcelReportButton
             idleLabel="Generate Daily Report"
-            generate={generateDailyReportWorkbook}
-            filename={() => `Steam-Trap-Daily-Report_${new Date().toISOString().slice(0, 10)}.xlsx`}
-          />
-          <GenerateExcelReportButton
-            idleLabel="Generate Monthly Report"
-            generate={generateMonthlyReportWorkbook}
-            filename={() => `Steam-Trap-Monthly-Report_${new Date().toISOString().slice(0, 10)}.xlsx`}
+            generate={generateDailyReportWorkbooks}
           />
         </div>
       </div>

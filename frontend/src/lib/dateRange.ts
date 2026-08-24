@@ -43,6 +43,28 @@ export function getLastMonthRange(now: Date = new Date()): DateRange {
   return { start, end };
 }
 
+/** Trailing 7 days ending right now — the weekly Management Report KPI table's "WTD" window. */
+export function getTrailing7DayRange(now: Date = new Date()): DateRange {
+  const start = new Date(now);
+  start.setDate(start.getDate() - 7);
+  return { start, end: now };
+}
+
+/** 1st of the current month 00:00:00 through right now — the weekly Management Report KPI table's "MTD" window. */
+export function getMonthToDateRange(now: Date = new Date()): DateRange {
+  return { start: new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0), end: now };
+}
+
+/**
+ * April 1st of the current Indian financial year through right now — the weekly Management
+ * Report KPI table's "YTD (current FY)" window (the template header says FY explicitly, and
+ * HMEL runs on the Indian April-March financial year).
+ */
+export function getFinancialYearToDateRange(now: Date = new Date()): DateRange {
+  const fyStartYear = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
+  return { start: new Date(fyStartYear, 3, 1, 0, 0, 0, 0), end: now };
+}
+
 /** Today, 00:00:00 through right now (local time) — used by the Daily Report, which is windowed to "today" per its name and the source template's own 24hr duration. */
 export function getTodayRange(now: Date = new Date()): DateRange {
   const start = new Date(now);

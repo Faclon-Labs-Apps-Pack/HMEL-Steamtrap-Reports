@@ -3,7 +3,7 @@ import path from 'node:path';
 import { OUTPUT_DIR } from '../config';
 
 export interface PendingEmail {
-  reportType: 'weekly' | 'daily' | 'monthly';
+  reportType: 'weekly' | 'daily';
   fileName: string;
   downloadUrl: string;
   recipients: string[];

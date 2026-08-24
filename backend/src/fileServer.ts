@@ -1,4 +1,5 @@
 import express from 'express';
+import contentDisposition from 'content-disposition';
 import path from 'node:path';
 import { existsSync } from 'node:fs';
 import { stat, unlink } from 'node:fs/promises';
@@ -59,7 +60,10 @@ export function startFileServer(): ReturnType<express.Express['listen']> {
       console.log(`[fileServer] HEAD probe for ${fileName} from ${requester} (not treated as the download)`);
       res.set('Content-Length', String(stats.size));
       res.set('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-      res.set('Content-Disposition', `attachment; filename="${fileName}"`);
+      // contentDisposition() RFC 5987-encodes non-ASCII (the report names contain an en dash) —
+      // setting the raw filename here throws ERR_INVALID_CHAR and 500s the whole response.
+      // res.download() on the GET path below already encodes via this same library.
+      res.set('Content-Disposition', contentDisposition(fileName));
       res.status(200).end();
       return;
     }

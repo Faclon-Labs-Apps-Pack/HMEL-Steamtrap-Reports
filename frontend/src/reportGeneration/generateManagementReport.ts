@@ -1,53 +1,214 @@
 import { Workbook } from 'exceljs';
-import { collectManagementReportData, type ManagementReportProgress } from './collectManagementReportData';
-import { buildOverviewSheet } from './buildOverviewSheet';
-import { buildDetailSheet } from './buildDetailSheet';
-import { buildCorrectiveActionLogSheet } from './buildCorrectiveActionLogSheet';
+import { findDevicesByType, getLastDataPoints } from '../services/iosenseApi';
+import { getCorrectiveActions, type CorrectiveActionRecord } from '../services/correctiveActionApi';
+import { getTimeSeriesStatsByDevice, type DeviceTimeSeriesStats } from '../services/deviceTimeSeriesStats';
+import { getSteamConsumptionTotal } from '../services/steamConsumptionApi';
+import { extractDepartmentFromTags } from '../lib/departmentTag';
+import { derivePlantCategory, normalizeUnit, CATEGORY_UNIT_ROSTER, UNASSIGNED } from '../lib/plantCategory';
+import { classifyStatus } from '../lib/statusClassification';
+import {
+  getLastWeekRange,
+  getMonthToDateRange,
+  getFinancialYearToDateRange,
+  normalizeDateRange,
+  toEpochMs,
+  type DateRange,
+} from '../lib/dateRange';
+import { weeklyReportName, weeklyReportFileName } from '../lib/reportNaming';
+import { HMEL_LOGO_BASE64 } from './hmelLogo';
+import {
+  buildWeeklyStatusSheet,
+  WEEKLY_STATUS_GROUPS,
+  type WeeklyKpiWindow,
+  type WeeklyPerfWindows,
+  type WeeklyUnitStatusRow,
+  type WeeklyUnitCARow,
+} from './buildWeeklyStatusSheet';
+import type { Device, LastDataPoint } from '../types/device';
 
-export type { ManagementReportProgress };
+const STEAM_TRAP_DEVICE_TYPE = 'steam trap';
+const STATUS_SENSOR = 'S1';
+const STEAM_LOSS_SENSOR = 'D11';
+const STEAM_SAVING_SENSOR = 'D12';
+
+export interface ManagementReportProgress {
+  label: string;
+}
+
+export interface WeeklyCategoryReport {
+  categoryName: string;
+  /** e.g. 'Steam Trap Weekly Report–Refinery-26/07/26'. */
+  reportName: string;
+  fileName: string;
+  workbook: Workbook;
+}
+
+const unitOf = (d: Device) => extractDepartmentFromTags(d.tags) ?? UNASSIGNED;
+
+function healthPct(devices: Device[], stats: Map<string, DeviceTimeSeriesStats>): number {
+  if (devices.length === 0) return 0;
+  return devices.reduce((s, d) => s + (stats.get(d.devID)?.statusPercentages.Normal ?? 0), 0) / devices.length;
+}
+
+function groupedStatusCounts(devices: Device[], statusByDevID: Map<string, number | string>): WeeklyUnitStatusRow['counts'] {
+  const counts = Object.fromEntries(WEEKLY_STATUS_GROUPS.map((g) => [g.label, 0])) as Record<string, number>;
+  for (const d of devices) {
+    const status = classifyStatus(statusByDevID.get(d.devID));
+    const group = WEEKLY_STATUS_GROUPS.find((g) => g.statuses.includes(status));
+    if (group) counts[group.label] += 1;
+  }
+  return counts;
+}
+
+function withinWindow(iso: string, startMs: number, endMs: number): boolean {
+  const t = new Date(iso).getTime();
+  return t >= startMs && t <= endMs;
+}
+
+function countCA(devices: Device[], records: CorrectiveActionRecord[], startMs: number, endMs: number): number {
+  const devIDs = new Set(devices.map((d) => d.devID));
+  return records.filter((r) => devIDs.has(r.devId) && withinWindow(r.dateAndTime, startMs, endMs)).length;
+}
 
 /**
- * Builds the full 5-sheet Management Report workbook, matching
- * "report templates/ManagementReportFormat for Steam Traps 1 (1).xlsx"'s structure with help
- * text stripped and real data populated. Always uses the last fully-completed week (Monday
- * through Sunday) for time-windowed data — status counts in the overview sheets are
- * instantaneous (current status), everything else (percentages, change counts, per-unit
- * corrective action counts, and the Corrective Action Log sheet itself) is windowed to that
- * last week, since this report is generated weekly and should cover a closed period rather
- * than the still-in-progress current week. (The standalone "Corrective Action Log" dashboard
- * tab is intentionally different — that one stays all-time, since it's a running log rather
- * than a period report.)
+ * The units to list as rows for a category: the full canonical roster (in order, so units with
+ * no devices still appear as blank rows), followed by any live units not in the roster. Live
+ * devices are attached to a roster unit by normalized name (so "PE-SWING-LINE-1" fills the
+ * "PE Swing Line-1" row).
  */
-export async function generateManagementReportWorkbook(
+function categoryUnitRows(categoryName: string, catDevices: Device[]): { displayName: string; devices: Device[] }[] {
+  const byNorm = new Map<string, Device[]>();
+  for (const d of catDevices) {
+    const k = normalizeUnit(unitOf(d));
+    const bucket = byNorm.get(k);
+    if (bucket) bucket.push(d);
+    else byNorm.set(k, [d]);
+  }
+
+  const rows: { displayName: string; devices: Device[] }[] = [];
+  const used = new Set<string>();
+  for (const canonical of CATEGORY_UNIT_ROSTER[categoryName] ?? []) {
+    const k = normalizeUnit(canonical);
+    rows.push({ displayName: canonical, devices: byNorm.get(k) ?? [] });
+    used.add(k);
+  }
+  for (const [k, devs] of byNorm) {
+    if (!used.has(k)) rows.push({ displayName: unitOf(devs[0]), devices: devs });
+  }
+  return rows;
+}
+
+/**
+ * Builds the weekly Management Report — ONE WORKBOOK PER PLANT CATEGORY, each a single
+ * "Steam Trap Status-<Category>" sheet listing that category's units as rows, matching the
+ * client reference ("Steam Trap Weekly Report-Refinery 26-07-2026.xlsx"). Mirrors the backend's
+ * generateManagementReport.ts — keep the two in sync.
+ */
+export async function generateManagementReportWorkbooks(
   onProgress?: (progress: ManagementReportProgress) => void,
-): Promise<Workbook> {
-  const data = await collectManagementReportData(onProgress);
+): Promise<WeeklyCategoryReport[]> {
+  const report = (label: string) => onProgress?.({ label });
 
-  const workbook = new Workbook();
-  workbook.creator = 'HMEL Steamtrap Reports';
-  workbook.created = data.generatedAt;
+  report('Loading devices…');
+  const devices = await findDevicesByType(STEAM_TRAP_DEVICE_TYPE);
 
-  buildOverviewSheet(
-    workbook.addWorksheet('SteamtrapStatusOverview-Refiner'),
-    'Refinery',
-    data.range,
-    data.generatedAt,
-    data.matrix,
-    data.correctiveActionMatrix,
-    data.refineryKpis,
-  );
-  buildOverviewSheet(
-    workbook.addWorksheet('SteamtrapStatusOverview-petchem'),
-    'Petchem',
-    data.range,
-    data.generatedAt,
-    data.matrix,
-    data.correctiveActionMatrix,
-    data.petchemKpis,
-  );
-  buildDetailSheet(workbook.addWorksheet('Refinery'), data.refineryRows);
-  buildDetailSheet(workbook.addWorksheet('Petchem'), data.petchemRows);
-  buildCorrectiveActionLogSheet(workbook.addWorksheet('Corrective Action Log'), data.logRows);
+  const range = normalizeDateRange(getLastWeekRange());
+  const generatedAt = new Date();
+  const endMs = toEpochMs(range.end);
+  const wtdRange = range;
+  const mtdRange = getMonthToDateRange(range.end);
+  const ytdRange = getFinancialYearToDateRange(range.end);
 
-  return workbook;
+  report(`Loading current status for ${devices.length} devices…`);
+  const lastDPs: LastDataPoint[] = await getLastDataPoints(devices.map((d) => ({ devID: d.devID, sensor: STATUS_SENSOR })));
+  const statusByDevID = new Map(lastDPs.map((dp) => [dp.devID, dp.value]));
+
+  report('Loading corrective actions (YTD)…');
+  const ytdRecords = await getCorrectiveActions(devices.map((d) => d.devID), { startMs: toEpochMs(ytdRange.start), endMs });
+
+  report('Analyzing S1 history (WTD)…');
+  const wtdStats = await getTimeSeriesStatsByDevice(devices, toEpochMs(wtdRange.start), endMs);
+  report('Analyzing S1 history (MTD)…');
+  const mtdStats = await getTimeSeriesStatsByDevice(devices, toEpochMs(mtdRange.start), endMs);
+  report('Analyzing S1 history (YTD)…');
+  const ytdStats = await getTimeSeriesStatsByDevice(devices, toEpochMs(ytdRange.start), endMs);
+
+  // One report per client-defined plant category (Refinery, Petchem) — always both, even if a
+  // category has no devices this week. Devices that don't classify into either (untagged in
+  // IOsense, or an unknown unit) are surfaced as a warning, not shipped as an "Unassigned" report.
+  const categoryNames = Object.keys(CATEGORY_UNIT_ROSTER);
+  const unclassified = devices.filter((d) => !categoryNames.includes(derivePlantCategory(unitOf(d))));
+  if (unclassified.length > 0) {
+    console.warn(
+      `[weekly] ${unclassified.length} device(s) are not in ${categoryNames.join('/')} (missing/unknown department tag) — excluded from all reports. ` +
+        `Example devIDs: ${unclassified.slice(0, 5).map((d) => d.devID).join(', ')}`,
+    );
+  }
+
+  const windowSteam = (devs: Device[], win: DateRange) =>
+    Promise.all([
+      getSteamConsumptionTotal(devs, STEAM_LOSS_SENSOR, toEpochMs(win.start), toEpochMs(win.end)),
+      getSteamConsumptionTotal(devs, STEAM_SAVING_SENSOR, toEpochMs(win.start), toEpochMs(win.end)),
+    ]);
+
+  const reports: WeeklyCategoryReport[] = [];
+  for (const categoryName of categoryNames) {
+    const catDevices = devices.filter((d) => derivePlantCategory(unitOf(d)) === categoryName);
+    const unitRows = categoryUnitRows(categoryName, catDevices);
+
+    report(`Loading WTD/MTD/YTD steam loss/saving for ${categoryName}…`);
+    const [[wLoss, wSave], [mLoss, mSave], [yLoss, ySave]] = await Promise.all([
+      windowSteam(catDevices, wtdRange),
+      windowSteam(catDevices, mtdRange),
+      windowSteam(catDevices, ytdRange),
+    ]);
+    const kpi = (health: number, lossMT: number, saveMT: number): WeeklyKpiWindow => ({
+      trapHealthPct: health,
+      steamLossMT: lossMT,
+      steamSavingMT: saveMT,
+    });
+    const perf: WeeklyPerfWindows = {
+      wtd: kpi(healthPct(catDevices, wtdStats), wLoss, wSave),
+      mtd: kpi(healthPct(catDevices, mtdStats), mLoss, mSave),
+      ytd: kpi(healthPct(catDevices, ytdStats), yLoss, ySave),
+    };
+
+    const statusRows: WeeklyUnitStatusRow[] = unitRows.map(({ displayName, devices: unitDevices }) => ({
+      unitName: displayName,
+      counts: groupedStatusCounts(unitDevices, statusByDevID),
+      total: unitDevices.length,
+    }));
+
+    const caRows: WeeklyUnitCARow[] = unitRows.map(({ displayName, devices: unitDevices }) => ({
+      unitName: displayName,
+      wtd: countCA(unitDevices, ytdRecords, toEpochMs(wtdRange.start), endMs),
+      mtd: countCA(unitDevices, ytdRecords, toEpochMs(mtdRange.start), endMs),
+      ytd: countCA(unitDevices, ytdRecords, toEpochMs(ytdRange.start), endMs),
+    }));
+
+    const workbook = new Workbook();
+    workbook.creator = 'HMEL Steamtrap Reports';
+    workbook.created = generatedAt;
+    const logoImageId = workbook.addImage({ base64: HMEL_LOGO_BASE64, extension: 'png' });
+
+    buildWeeklyStatusSheet(
+      workbook.addWorksheet(`Steam Trap Status-${categoryName}`.slice(0, 31)),
+      categoryName,
+      range,
+      generatedAt,
+      perf,
+      statusRows,
+      caRows,
+      logoImageId,
+    );
+
+    reports.push({
+      categoryName,
+      reportName: weeklyReportName(categoryName, generatedAt),
+      fileName: weeklyReportFileName(categoryName, generatedAt),
+      workbook,
+    });
+  }
+
+  return reports;
 }

@@ -18,6 +18,7 @@
     "express": "^5.2.1"
   },
   "devDependencies": {
+    "@types/content-disposition": "^0.5.9",
     "@types/express": "^5.0.6",
     "@types/node": "^24.13.2",
     "tsx": "^4.19.2",

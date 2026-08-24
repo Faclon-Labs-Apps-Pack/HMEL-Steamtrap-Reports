@@ -64,9 +64,91 @@ function parseRecipients(name: string): string[] {
     .filter(Boolean);
 }
 
-export interface ReportScheduleConfig {
+/** Env-var-safe key for a unit/category name: uppercased, runs of non-alphanumerics → a single underscore. E.g. "DFCU (AU)" -> "DFCU_AU", "Petchem Offsite" -> "PETCHEM_OFFSITE". */
+export function envKey(name: string): string {
+  return name.toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+}
+
+/**
+ * Recipients for ONE unit's Daily Report — its own designated list, e.g.
+ *   "Petchem Offsite"  -> PETCHEM_OFFSITE_DAILY_RECIPIENTS
+ *   "CPP-575"          -> CPP_575_DAILY_RECIPIENTS
+ * (the legacy DAILY_REPORT_RECIPIENTS_<UNIT> name is still accepted). A unit without either
+ * falls back to the shared DAILY_REPORT_RECIPIENTS.
+ */
+export function getDailyRecipientsForUnit(unitName: string): string[] {
+  const key = envKey(unitName);
+  const own = parseRecipients(`${key}_DAILY_RECIPIENTS`);
+  if (own.length > 0) return own;
+  const legacy = parseRecipients(`DAILY_REPORT_RECIPIENTS_${key}`);
+  if (legacy.length > 0) return legacy;
+  return parseRecipients('DAILY_REPORT_RECIPIENTS');
+}
+
+/** One section's own schedule: which key it covers, when it fires, and who receives it. */
+export interface SectionSchedule {
+  key: string; // envKey form, e.g. CPP_575 or REFINERY
   cron: string;
   recipients: string[];
+}
+
+/**
+ * Units that have their OWN daily send time set via <UNITKEY>_DAILY_TIME (24-hour HH:MM) — each
+ * is scheduled individually at that time, to its own <UNITKEY>_DAILY_RECIPIENTS (falling back to
+ * the shared DAILY_REPORT_RECIPIENTS). Units WITHOUT their own time are generated together by the
+ * shared DAILY_REPORT_TIME job instead (see getDailyDefaultCron).
+ */
+export function getDailyUnitSchedules(): SectionSchedule[] {
+  const schedules: SectionSchedule[] = [];
+  for (const [name, value] of Object.entries(process.env)) {
+    const match = /^(.+)_DAILY_TIME$/.exec(name);
+    if (!match || !value?.trim()) continue;
+    const key = match[1];
+    const own = parseRecipients(`${key}_DAILY_RECIPIENTS`);
+    schedules.push({
+      key,
+      cron: dailyTimeToCron(value),
+      recipients: own.length > 0 ? own : parseRecipients('DAILY_REPORT_RECIPIENTS'),
+    });
+  }
+  return schedules;
+}
+
+/** The shared daily send time (DAILY_REPORT_TIME / DAILY_REPORT_CRON), for every unit without its own <UNIT>_DAILY_TIME. Null if not configured. */
+export function getDailyDefaultCron(): string | null {
+  const time = process.env.DAILY_REPORT_TIME;
+  if (time?.trim()) return dailyTimeToCron(time);
+  const cron = process.env.DAILY_REPORT_CRON;
+  return cron?.trim() ? cron : null;
+}
+
+/**
+ * A plant category's OWN weekly schedule via <CATEGORY>_WEEKLY_DAY + <CATEGORY>_WEEKLY_TIME
+ * (e.g. REFINERY_WEEKLY_DAY=Mon, REFINERY_WEEKLY_TIME=06:00), sent to <CATEGORY>_WEEKLY_RECIPIENTS
+ * (falling back to the shared WEEKLY_REPORT_RECIPIENTS). Null unless BOTH day and time are set —
+ * such categories fall back to the shared WEEKLY_REPORT_DAY/TIME job (see getWeeklyDefaultCron).
+ */
+export function getWeeklyCategorySchedule(category: string): SectionSchedule | null {
+  const key = envKey(category);
+  const day = process.env[`${key}_WEEKLY_DAY`];
+  const time = process.env[`${key}_WEEKLY_TIME`];
+  if (!day?.trim() || !time?.trim()) return null;
+  return { key, cron: weeklyDayTimeToCron(day, time), recipients: getWeeklyRecipientsForCategory(category) };
+}
+
+/** Recipients for one weekly category — its own <CATEGORY>_WEEKLY_RECIPIENTS, falling back to the shared WEEKLY_REPORT_RECIPIENTS. */
+export function getWeeklyRecipientsForCategory(category: string): string[] {
+  const own = parseRecipients(`${envKey(category)}_WEEKLY_RECIPIENTS`);
+  return own.length > 0 ? own : parseRecipients('WEEKLY_REPORT_RECIPIENTS');
+}
+
+/** The shared weekly schedule (WEEKLY_REPORT_DAY/TIME or WEEKLY_REPORT_CRON), for every category without its own. Null if not configured. */
+export function getWeeklyDefaultCron(): string | null {
+  const day = process.env.WEEKLY_REPORT_DAY;
+  const time = process.env.WEEKLY_REPORT_TIME;
+  if (day?.trim() && time?.trim()) return weeklyDayTimeToCron(day, time);
+  const cron = process.env.WEEKLY_REPORT_CRON;
+  return cron?.trim() ? cron : null;
 }
 
 /** Converts a plain 24-hour "HH:MM" into an every-day cron expression ("M H * * *"). */
@@ -77,26 +159,6 @@ function dailyTimeToCron(time: string): string {
   }
   const [, hour, minute] = match;
   return `${Number(minute)} ${Number(hour)} * * *`;
-}
-
-/**
- * Converts a day-of-month (1-28) + plain 24-hour "HH:MM" into a monthly cron expression
- * ("M H D * *"). Capped at 28 (not 31) so it fires reliably every single month regardless of
- * February or 30-day months — a date like 30 would silently skip February entirely.
- */
-function monthlyDateTimeToCron(day: string, time: string): string {
-  const dayNum = Number(day);
-  if (!Number.isInteger(dayNum) || dayNum < 1 || dayNum > 28) {
-    throw new Error(
-      `Invalid MONTHLY_REPORT_DATE "${day}" — expected an integer from 1 to 28 (capped at 28 so it exists in every month, including February).`,
-    );
-  }
-  const match = /^([01]?\d|2[0-3]):([0-5]\d)$/.exec(time.trim());
-  if (!match) {
-    throw new Error(`Invalid MONTHLY_REPORT_TIME "${time}" — expected 24-hour HH:MM, e.g. 06:00.`);
-  }
-  const [, hour, minute] = match;
-  return `${Number(minute)} ${Number(hour)} ${dayNum} * *`;
 }
 
 const DAY_OF_WEEK: Record<string, number> = {
@@ -136,46 +198,6 @@ function weeklyDayTimeToCron(day: string, time: string): string {
   return `${Number(minute)} ${Number(hour)} * * ${dow}`;
 }
 
-/**
- * Lazy on purpose — the one-shot `npm run generate` command doesn't need scheduling/email
- * config at all, only the scheduler daemon does. Eagerly reading these at module load would
- * make `generate` require env vars it has no use for.
- */
-export function getReportScheduleConfig(report: 'weekly' | 'daily' | 'monthly'): ReportScheduleConfig {
-  switch (report) {
-    case 'daily': {
-      // Daily report has no day-of-week component, so a plain time is enough — DAILY_REPORT_TIME
-      // is preferred; DAILY_REPORT_CRON still works for anyone who wants a raw cron expression.
-      const time = process.env.DAILY_REPORT_TIME;
-      return {
-        cron: time ? dailyTimeToCron(time) : requireEnv('DAILY_REPORT_CRON'),
-        recipients: parseRecipients('DAILY_REPORT_RECIPIENTS'),
-      };
-    }
-    case 'monthly': {
-      // Monthly report needs a day-of-month + time — MONTHLY_REPORT_DATE + MONTHLY_REPORT_TIME
-      // are preferred; MONTHLY_REPORT_CRON still works for anyone who wants a raw cron expression
-      // (e.g. to express something monthlyDateTimeToCron can't, like "last day of the month").
-      const day = process.env.MONTHLY_REPORT_DATE;
-      const time = process.env.MONTHLY_REPORT_TIME;
-      return {
-        cron: day && time ? monthlyDateTimeToCron(day, time) : requireEnv('MONTHLY_REPORT_CRON'),
-        recipients: parseRecipients('MONTHLY_REPORT_RECIPIENTS'),
-      };
-    }
-    case 'weekly':
-    default: {
-      // Weekly report needs a day-of-week + time — WEEKLY_REPORT_DAY + WEEKLY_REPORT_TIME are
-      // preferred; WEEKLY_REPORT_CRON still works for anyone who wants a raw cron expression.
-      const day = process.env.WEEKLY_REPORT_DAY;
-      const time = process.env.WEEKLY_REPORT_TIME;
-      return {
-        cron: day && time ? weeklyDayTimeToCron(day, time) : requireEnv('WEEKLY_REPORT_CRON'),
-        recipients: parseRecipients('WEEKLY_REPORT_RECIPIENTS'),
-      };
-    }
-  }
-}
 
 /**
  * IOsense's `sendEmail` API fetches attachments by URL (pull-based, GET request from IOsense's
