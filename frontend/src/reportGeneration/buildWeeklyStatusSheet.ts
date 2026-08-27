@@ -2,6 +2,7 @@ import type { Worksheet } from 'exceljs';
 import type { StatusColumn } from '../lib/statusClassification';
 import type { DateRange } from '../lib/dateRange';
 import { ALL_BORDERS, BLUE_HEADER_FILL, BOLD_FONT, CENTER, LEFT } from './xlsxStyles';
+import { HMEL_LOGO_WEEKLY_SIZE } from './hmelLogo';
 
 /** Hardcoded per explicit request — matches the "Rate of Steam" row shown in the client template. */
 const HARDCODED_COST_OF_STEAM = 2473;
@@ -56,10 +57,6 @@ const pad2 = (n: number) => String(n).padStart(2, '0');
 /** DD-MMM-YY HH:MM:SS, e.g. 26-Jul-26 23:59:59. */
 function formatDate(d: Date): string {
   return `${pad2(d.getDate())}-${MONTH_ABBR[d.getMonth()]}-${pad2(d.getFullYear() % 100)} ${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
-}
-
-function formatINR(amount: number): string {
-  return Math.round(amount).toLocaleString('en-US');
 }
 
 const NUM_COLS = 10; // A..J — data starts at column A (no left gutter)
@@ -123,7 +120,9 @@ export function buildWeeklyStatusSheet(
   title.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
   title.fill = BLUE_HEADER_FILL;
   sheet.mergeCells('A1:B2');
-  sheet.addImage(logoImageId, { tl: { col: 0.35, row: 0.2 }, ext: { width: 60, height: 59 } });
+  // The logo image is a cell-sized white canvas with the HMEL mark centered on it, anchored to
+  // fill A1:B2 — so the mark reads as centered (ExcelJS's per-cell offset can't center reliably).
+  sheet.addImage(logoImageId, { tl: { col: 0, row: 0 }, ext: HMEL_LOGO_WEEKLY_SIZE });
   for (let r = 1; r <= 2; r++) {
     for (let c = 1; c <= NUM_COLS; c++) sheet.getCell(r, c).border = ALL_BORDERS;
   }
@@ -144,26 +143,33 @@ export function buildWeeklyStatusSheet(
   header(perfHeaderRow, 6, 8, 'MTD');
   header(perfHeaderRow, 9, 10, 'YTD');
 
-  const fmtPct = (p: number) => `${p.toFixed(1)}%`;
   const cost = HARDCODED_COST_OF_STEAM;
-  const perfRow = (r: number, label: string, w: string, m: string, y: string) => {
+  // Each WTD/MTD/YTD value is a real NUMBER with a number-format (percent / MT / INR), never a
+  // preformatted string — so Excel doesn't flag "number stored as text" and columns stay
+  // summable. Trap health is stored as a fraction (0-1) because the '0.0%' format ×100 on display.
+  const perfRow = (r: number, label: string, w: number, m: number, y: number, numFmt: string) => {
     header(r, 1, 3, label, 'left');
     (sheet.getCell(r, 1).font = { bold: false }); // labels here are not bold in the reference
     (sheet.getCell(r, 1).fill = { type: 'pattern', pattern: 'none' });
-    dataCell(r, 4, 5, w);
-    dataCell(r, 6, 8, m);
-    dataCell(r, 9, 10, y);
+    const put = (c1: number, c2: number, v: number) => {
+      dataCell(r, c1, c2, v);
+      sheet.getCell(r, c1).numFmt = numFmt;
+    };
+    put(4, 5, w);
+    put(6, 8, m);
+    put(9, 10, y);
   };
-  perfRow(7, 'Overall Trap Health', fmtPct(perf.wtd.trapHealthPct), fmtPct(perf.mtd.trapHealthPct), fmtPct(perf.ytd.trapHealthPct));
+  perfRow(7, 'Overall Trap Health', perf.wtd.trapHealthPct / 100, perf.mtd.trapHealthPct / 100, perf.ytd.trapHealthPct / 100, '0.0%');
   // Rate of steam: one constant value spanning all three windows.
   header(8, 1, 3, 'Rate of Steam (INR/MT)', 'left');
   sheet.getCell(8, 1).font = { bold: false };
   sheet.getCell(8, 1).fill = { type: 'pattern', pattern: 'none' };
-  dataCell(8, 4, 10, cost.toLocaleString('en-US'));
-  perfRow(9, 'Steam Loss (MT)', perf.wtd.steamLossMT.toFixed(2), perf.mtd.steamLossMT.toFixed(2), perf.ytd.steamLossMT.toFixed(2));
-  perfRow(10, 'Steam Savings (MT)', perf.wtd.steamSavingMT.toFixed(2), perf.mtd.steamSavingMT.toFixed(2), perf.ytd.steamSavingMT.toFixed(2));
-  perfRow(11, 'Loss (INR)', formatINR(perf.wtd.steamLossMT * cost), formatINR(perf.mtd.steamLossMT * cost), formatINR(perf.ytd.steamLossMT * cost));
-  perfRow(12, 'Savings (INR)', formatINR(perf.wtd.steamSavingMT * cost), formatINR(perf.mtd.steamSavingMT * cost), formatINR(perf.ytd.steamSavingMT * cost));
+  dataCell(8, 4, 10, cost);
+  sheet.getCell(8, 4).numFmt = '#,##0';
+  perfRow(9, 'Steam Loss (MT)', perf.wtd.steamLossMT, perf.mtd.steamLossMT, perf.ytd.steamLossMT, '0.00');
+  perfRow(10, 'Steam Savings (MT)', perf.wtd.steamSavingMT, perf.mtd.steamSavingMT, perf.ytd.steamSavingMT, '0.00');
+  perfRow(11, 'Loss (INR)', perf.wtd.steamLossMT * cost, perf.mtd.steamLossMT * cost, perf.ytd.steamLossMT * cost, '#,##0');
+  perfRow(12, 'Savings (INR)', perf.wtd.steamSavingMT * cost, perf.mtd.steamSavingMT * cost, perf.ytd.steamSavingMT * cost, '#,##0');
   box(perfHeaderRow, 12);
 
   // --- Steam Trap Status table.

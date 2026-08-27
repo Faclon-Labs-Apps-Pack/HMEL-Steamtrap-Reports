@@ -13,6 +13,7 @@ import {
 import { startFileServer } from './fileServer';
 import { scheduleReport, longSetTimeout } from './scheduler/scheduleReport';
 import { addPendingEmail, removePendingEmail, getPendingEmails, type PendingEmail } from './scheduler/pendingEmails';
+import { logReport } from './scheduler/reportLog';
 import { sendReportEmail } from './email/sendReportEmail';
 import { saveWorkbook } from './reportGeneration/saveWorkbook';
 import { generateManagementReportWorkbooks } from './reportGeneration/generateManagementReport';
@@ -27,7 +28,18 @@ import { generateDailyReportWorkbooks } from './reportGeneration/generateDailyRe
  * <CATEGORY>_WEEKLY_DAY/TIME can be scheduled independently. The subject is the report/file name.
  */
 async function generateWeekly(occurrence: Date, opts?: { categories?: string[] }): Promise<PendingEmail[]> {
-  const reports = await generateManagementReportWorkbooks((p) => console.log(`[weekly] ${p.label}`), opts);
+  let reports;
+  try {
+    reports = await generateManagementReportWorkbooks((p) => console.log(`[weekly] ${p.label}`), opts);
+  } catch (err) {
+    await logReport({
+      reportType: 'weekly',
+      section: opts?.categories?.join(', ') ?? '(all categories)',
+      status: 'generation-failed',
+      error: err instanceof Error ? err.message : String(err),
+    });
+    throw err;
+  }
 
   const pendings: PendingEmail[] = [];
   for (const { categoryName, reportName, fileName, workbook } of reports) {
@@ -35,14 +47,19 @@ async function generateWeekly(occurrence: Date, opts?: { categories?: string[] }
 
     const recipients = getWeeklyRecipientsForCategory(categoryName);
     if (recipients.length === 0) {
-      console.warn(
-        `[weekly] No recipients configured for ${categoryName} (set ${categoryName.toUpperCase()}_WEEKLY_RECIPIENTS or WEEKLY_REPORT_RECIPIENTS) — report saved but no email will be sent.`,
-      );
+      await logReport({
+        reportType: 'weekly',
+        section: categoryName,
+        status: 'skipped',
+        fileName,
+        error: `No recipients configured (set ${categoryName.toUpperCase()}_WEEKLY_RECIPIENTS or WEEKLY_REPORT_RECIPIENTS)`,
+      });
       continue;
     }
 
     const pending: PendingEmail = {
       reportType: 'weekly',
+      section: categoryName,
       fileName,
       downloadUrl: `${getReportBaseUrl()}/report/${encodeURIComponent(fileName)}`,
       recipients,
@@ -76,7 +93,18 @@ async function generateDaily(
   occurrence: Date,
   opts?: { unitKeys?: string[]; excludeUnitKeys?: string[] },
 ): Promise<PendingEmail[]> {
-  const reports = await generateDailyReportWorkbooks((p) => console.log(`[daily] ${p.label}`), opts);
+  let reports;
+  try {
+    reports = await generateDailyReportWorkbooks((p) => console.log(`[daily] ${p.label}`), opts);
+  } catch (err) {
+    await logReport({
+      reportType: 'daily',
+      section: opts?.unitKeys?.join(', ') ?? '(all units)',
+      status: 'generation-failed',
+      error: err instanceof Error ? err.message : String(err),
+    });
+    throw err;
+  }
 
   const pendings: PendingEmail[] = [];
   for (const { unitName, reportName, fileName, workbook } of reports) {
@@ -84,14 +112,19 @@ async function generateDaily(
 
     const recipients = getDailyRecipientsForUnit(unitName);
     if (recipients.length === 0) {
-      console.warn(
-        `[daily] No recipients configured for unit "${unitName}" (set DAILY_REPORT_RECIPIENTS_* or DAILY_REPORT_RECIPIENTS) — report saved but no email will be sent.`,
-      );
+      await logReport({
+        reportType: 'daily',
+        section: unitName,
+        status: 'skipped',
+        fileName,
+        error: `No recipients configured (set ${unitName.toUpperCase().replace(/[^A-Z0-9]+/g, '_')}_DAILY_RECIPIENTS or DAILY_REPORT_RECIPIENTS)`,
+      });
       continue;
     }
 
     const pending: PendingEmail = {
       reportType: 'daily',
+      section: unitName,
       fileName,
       downloadUrl: `${getReportBaseUrl()}/report/${encodeURIComponent(fileName)}`,
       recipients,
@@ -149,14 +182,34 @@ async function verifyFileBeforeSend(fileName: string): Promise<void> {
 async function sendPending(pending: PendingEmail): Promise<void> {
   await verifyFileBeforeSend(pending.fileName);
   console.log(`[sendPending] Attachment URL IOsense will fetch: ${pending.downloadUrl}`);
-  await sendReportEmail({
-    to: pending.recipients,
-    subject: pending.subject,
-    reportTitle: pending.reportTitle,
-    message: pending.message,
-    attachments: [{ url: pending.downloadUrl, fileName: pending.fileName }],
-  });
+  try {
+    await sendReportEmail({
+      to: pending.recipients,
+      subject: pending.subject,
+      reportTitle: pending.reportTitle,
+      message: pending.message,
+      attachments: [{ url: pending.downloadUrl, fileName: pending.fileName }],
+    });
+  } catch (err) {
+    // Log the failure with its reason; leave the pending entry in place so startup recovery retries it.
+    await logReport({
+      reportType: pending.reportType,
+      section: pending.section,
+      status: 'failed',
+      fileName: pending.fileName,
+      recipients: pending.recipients,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    throw err;
+  }
   await removePendingEmail(pending.fileName);
+  await logReport({
+    reportType: pending.reportType,
+    section: pending.section,
+    status: 'sent',
+    fileName: pending.fileName,
+    recipients: pending.recipients,
+  });
 }
 
 /**

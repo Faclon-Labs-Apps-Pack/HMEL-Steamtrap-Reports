@@ -3,6 +3,7 @@ import { classifyStatus, type StatusColumn } from '../lib/statusClassification';
 import type { DateRange } from '../lib/dateRange';
 import type { Device, LastDataPoint } from '../types/device';
 import { ALL_BORDERS, BLUE_HEADER_FILL, BOLD_FONT, CENTER, HEADER_FONT, LEFT } from './xlsxStyles';
+import { HMEL_LOGO_DAILY_SIZE } from './hmelLogo';
 
 /** Hardcoded per explicit request — not derived from device data. */
 const HARDCODED_COST_OF_STEAM = 2473;
@@ -49,11 +50,6 @@ const pad2 = (n: number) => String(n).padStart(2, '0');
 /** Client-specified format: DD-MMM-YY HH:MM:SS (e.g. 26-Jul-26 23:59:59). */
 function formatDate(d: Date): string {
   return `${pad2(d.getDate())}-${MONTH_ABBR[d.getMonth()]}-${pad2(d.getFullYear() % 100)} ${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
-}
-
-/** Whole-rupee figures with thousands separators, matching the mock's "166,941". */
-function formatINR(amount: number): string {
-  return Math.round(amount).toLocaleString('en-US');
 }
 
 /**
@@ -104,10 +100,9 @@ export function buildDailySummarySheet(
   // Title band is blue like the table headers (per the client mock); the logo cell stays white.
   titleCell.fill = BLUE_HEADER_FILL;
   sheet.mergeCells('A1:A2');
-  sheet.addImage(logoImageId, {
-    tl: { col: 0.35, row: 0.15 },
-    ext: { width: 44, height: 44 },
-  });
+  // The logo image is a cell-sized white canvas with the HMEL mark centered on it, anchored to
+  // fill A1:A2 — so the mark reads as centered (ExcelJS's per-cell offset can't center reliably).
+  sheet.addImage(logoImageId, { tl: { col: 0, row: 0 }, ext: HMEL_LOGO_DAILY_SIZE });
   for (let r = 1; r <= 2; r++) {
     for (let c = 1; c <= 5; c++) sheet.getCell(r, c).border = ALL_BORDERS;
   }
@@ -179,8 +174,10 @@ export function buildDailySummarySheet(
     countCell.alignment = CENTER;
     sheet.mergeCells(row, 4, row, 5);
     const pctCell = sheet.getCell(row, 4);
-    pctCell.value =
-      totalDevices > 0 ? `${((statusCounts[group.label] / totalDevices) * 100).toFixed(2)}%` : '0.00%';
+    // Real number (a fraction) + a percent number-format, NOT a "0.00%" string — so Excel treats
+    // it as a number (no "number stored as text" warning) and it stays summable.
+    pctCell.value = totalDevices > 0 ? statusCounts[group.label] / totalDevices : 0;
+    pctCell.numFmt = '0.00%';
     pctCell.alignment = CENTER;
     row += 1;
   }
@@ -194,7 +191,8 @@ export function buildDailySummarySheet(
   totalCountCell.alignment = CENTER;
   sheet.mergeCells(statusTotalRow, 4, statusTotalRow, 5);
   const totalPctCell = sheet.getCell(statusTotalRow, 4);
-  totalPctCell.value = totalDevices > 0 ? '100%' : '0.00%';
+  totalPctCell.value = totalDevices > 0 ? 1 : 0;
+  totalPctCell.numFmt = '0%';
   totalPctCell.font = BOLD_FONT;
   totalPctCell.alignment = CENTER;
   for (let r = statusTitleRow; r <= statusTotalRow; r++) {
@@ -214,59 +212,62 @@ export function buildDailySummarySheet(
   });
   row += 1;
 
-  const fmtPct = (p: number) => `${p.toFixed(1)}%`;
-  // label + [DTD, WTD, MTD, YTD] into columns 1..5.
-  const fourCol = (r: number, label: string, values: [string, string, string, string]) => {
+  // Each value is a real NUMBER with a number-format (percent / MT / INR), never a preformatted
+  // string — so Excel doesn't flag "number stored as text" and the columns stay summable.
+  // Trap health is stored as a fraction (0-1) because the '0.0%' format multiplies by 100.
+  const fourColNum = (r: number, label: string, values: [number, number, number, number], numFmt: string) => {
     sheet.getCell(r, 1).value = label;
     values.forEach((v, i) => {
       const cell = sheet.getCell(r, 2 + i);
       cell.value = v;
+      cell.numFmt = numFmt;
       cell.alignment = CENTER;
     });
   };
-  const healthDTD = totalDevices > 0 ? fmtPct((statusCounts.Normal / totalDevices) * 100) : '0.0%';
-  fourCol(row, 'Overall Trap Health', [
-    healthDTD,
-    fmtPct(periods.wtd.trapHealthPct),
-    fmtPct(periods.mtd.trapHealthPct),
-    fmtPct(periods.ytd.trapHealthPct),
-  ]);
+  const healthDTD = totalDevices > 0 ? statusCounts.Normal / totalDevices : 0;
+  fourColNum(
+    row,
+    'Overall Trap Health',
+    [healthDTD, periods.wtd.trapHealthPct / 100, periods.mtd.trapHealthPct / 100, periods.ytd.trapHealthPct / 100],
+    '0.0%',
+  );
   row += 1;
   // Rate of steam is a constant, shown once across all four windows.
   sheet.getCell(row, 1).value = 'Rate of Steam (INR/MT)';
   sheet.mergeCells(row, 2, row, 5);
   const rateCell = sheet.getCell(row, 2);
-  rateCell.value = HARDCODED_COST_OF_STEAM.toLocaleString('en-US');
+  rateCell.value = HARDCODED_COST_OF_STEAM;
+  rateCell.numFmt = '#,##0';
   rateCell.alignment = CENTER;
   row += 1;
-  fourCol(row, 'Steam Loss (MT)', [
-    steamLossMT.toFixed(2),
-    periods.wtd.steamLossMT.toFixed(2),
-    periods.mtd.steamLossMT.toFixed(2),
-    periods.ytd.steamLossMT.toFixed(2),
-  ]);
+  fourColNum(
+    row,
+    'Steam Loss (MT)',
+    [steamLossMT, periods.wtd.steamLossMT, periods.mtd.steamLossMT, periods.ytd.steamLossMT],
+    '0.00',
+  );
   row += 1;
-  fourCol(row, 'Steam Savings (MT)', [
-    steamSavingMT.toFixed(2),
-    periods.wtd.steamSavingMT.toFixed(2),
-    periods.mtd.steamSavingMT.toFixed(2),
-    periods.ytd.steamSavingMT.toFixed(2),
-  ]);
+  fourColNum(
+    row,
+    'Steam Savings (MT)',
+    [steamSavingMT, periods.wtd.steamSavingMT, periods.mtd.steamSavingMT, periods.ytd.steamSavingMT],
+    '0.00',
+  );
   row += 1;
   const cost = HARDCODED_COST_OF_STEAM;
-  fourCol(row, 'Loss (INR)', [
-    formatINR(steamLossMT * cost),
-    formatINR(periods.wtd.steamLossMT * cost),
-    formatINR(periods.mtd.steamLossMT * cost),
-    formatINR(periods.ytd.steamLossMT * cost),
-  ]);
+  fourColNum(
+    row,
+    'Loss (INR)',
+    [steamLossMT * cost, periods.wtd.steamLossMT * cost, periods.mtd.steamLossMT * cost, periods.ytd.steamLossMT * cost],
+    '#,##0',
+  );
   row += 1;
-  fourCol(row, 'Savings (INR)', [
-    formatINR(steamSavingMT * cost),
-    formatINR(periods.wtd.steamSavingMT * cost),
-    formatINR(periods.mtd.steamSavingMT * cost),
-    formatINR(periods.ytd.steamSavingMT * cost),
-  ]);
+  fourColNum(
+    row,
+    'Savings (INR)',
+    [steamSavingMT * cost, periods.wtd.steamSavingMT * cost, periods.mtd.steamSavingMT * cost, periods.ytd.steamSavingMT * cost],
+    '#,##0',
+  );
   for (let r = perfHeaderRow; r <= row; r++) {
     for (let c = 1; c <= 5; c++) sheet.getCell(r, c).border = ALL_BORDERS;
   }

@@ -33,6 +33,11 @@ export const API_BASE = process.env.IOSENSE_API_BASE ?? 'https://connector.iosen
 // not where you're looking for it" can't happen regardless of how the process was launched.
 export const OUTPUT_DIR = process.env.REPORT_OUTPUT_DIR ?? new URL('../output', import.meta.url).pathname;
 
+// Where the report send-log is written (report-log.txt + report-log.jsonl). Anchored to this
+// file's location like OUTPUT_DIR so it's found regardless of how the process is launched. Unlike
+// output/, these files are NEVER deleted — they're the audit trail of what was sent / what failed.
+export const LOG_DIR = process.env.REPORT_LOG_DIR ?? new URL('../logs', import.meta.url).pathname;
+
 // Where the frontend's production build (`npm run build` in frontend/, Vite's default `dist/`
 // output) lives, so the backend can serve it directly on the SAME port as the file server —
 // one process, one port, no reverse-proxy path-routing to misconfigure. Computed relative to

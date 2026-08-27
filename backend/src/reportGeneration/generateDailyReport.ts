@@ -21,10 +21,11 @@ import { extractDepartmentFromTags } from '../lib/departmentTag';
 import { derivePlantCategory, UNASSIGNED } from '../lib/plantCategory';
 import { envKey } from '../config';
 import { dailyReportFileName, dailyReportName } from '../lib/reportNaming';
-import { HMEL_LOGO_BASE64 } from './hmelLogo';
+import { HMEL_LOGO_DAILY_BASE64 } from './hmelLogo';
 import { buildDailySummarySheet, type SummaryWindowValues } from './buildDailySummarySheet';
 import { buildDailyAnalysisSheet } from './buildDailyAnalysisSheet';
 import { buildDailyLiveStatusSheet } from './buildDailyLiveStatusSheet';
+import { applyPrintLayout, formatReportDate } from './printLayout';
 import type { Device } from '../types/device';
 
 /** Restrict a device list to specific units (by env-key) — includes `unitKeys`, or all except `excludeUnitKeys`. */
@@ -102,7 +103,7 @@ export interface DailyUnitReport {
  */
 export async function generateDailyReportWorkbooks(
   onProgress?: (progress: DailyReportProgress) => void,
-  opts?: { unitKeys?: string[]; excludeUnitKeys?: string[] },
+  opts?: { unitKeys?: string[]; excludeUnitKeys?: string[]; fast?: boolean },
 ): Promise<DailyUnitReport[]> {
   const report = (label: string) => onProgress?.({ label });
 
@@ -153,10 +154,18 @@ export async function generateDailyReportWorkbooks(
   const timeSeriesStatsByDevID = await getTimeSeriesStatsByDevice(devices, startMs, endMs);
   report('Analyzing S1 history (WTD)…');
   const wtdStats = await getTimeSeriesStatsByDevice(devices, toEpochMs(wtdRange.start), endMs);
-  report('Analyzing S1 history (MTD)…');
-  const mtdStats = await getTimeSeriesStatsByDevice(devices, toEpochMs(mtdRange.start), endMs);
-  report('Analyzing S1 history (YTD)…');
-  const ytdStats = await getTimeSeriesStatsByDevice(devices, toEpochMs(ytdRange.start), endMs);
+  // Fast mode (design/testing): compute only DTD + WTD. The MTD and YTD windows require two more
+  // full-fleet S1 sweeps (YTD ≈ the whole financial year) — the slowest part — so they're skipped
+  // and their Summary cells shown as 0.
+  const emptyStats = new Map<string, DeviceTimeSeriesStats>();
+  let mtdStats = emptyStats;
+  let ytdStats = emptyStats;
+  if (!opts?.fast) {
+    report('Analyzing S1 history (MTD)…');
+    mtdStats = await getTimeSeriesStatsByDevice(devices, toEpochMs(mtdRange.start), endMs);
+    report('Analyzing S1 history (YTD)…');
+    ytdStats = await getTimeSeriesStatsByDevice(devices, toEpochMs(ytdRange.start), endMs);
+  }
 
   report(`Loading device properties (pressure, baseline temps, leak rate) for ${devices.length} devices…`);
   const propertiesByDevID = await getDevicePropertiesByDevice(devices);
@@ -201,12 +210,18 @@ export async function generateDailyReportWorkbooks(
       .filter((r) => r.department === unitName)
       .map((r, i) => ({ ...r, srNo: i + 1 }));
 
-    report(`Loading WTD/MTD/YTD steam loss/saving for ${unitName}…`);
-    const [[wtdLoss, wtdSave], [mtdLoss, mtdSave], [ytdLoss, ytdSave]] = await Promise.all([
-      windowSteam(unitDevices, wtdRange),
-      windowSteam(unitDevices, mtdRange),
-      windowSteam(unitDevices, ytdRange),
-    ]);
+    report(`Loading steam loss/saving for ${unitName}…`);
+    const [wtdLoss, wtdSave] = await windowSteam(unitDevices, wtdRange);
+    let mtdLoss = 0;
+    let mtdSave = 0;
+    let ytdLoss = 0;
+    let ytdSave = 0;
+    if (!opts?.fast) {
+      [[mtdLoss, mtdSave], [ytdLoss, ytdSave]] = await Promise.all([
+        windowSteam(unitDevices, mtdRange),
+        windowSteam(unitDevices, ytdRange),
+      ]);
+    }
 
     const windowValues = (
       stats: Map<string, DeviceTimeSeriesStats>,
@@ -222,19 +237,28 @@ export async function generateDailyReportWorkbooks(
       correctiveActions: sumForDevices(unitDevIDs, caCount),
       feedback: countFeedbackInWindow(unitDevices, feedbackDatesByDevID, winStartMs, endMs),
     });
+    const zeroWindow: SummaryWindowValues = {
+      trapHealthPct: 0,
+      steamLossMT: 0,
+      steamSavingMT: 0,
+      statusChanges: 0,
+      correctiveActions: 0,
+      feedback: 0,
+    };
     const periods = {
       wtd: windowValues(wtdStats, caWtd, wtdLoss, wtdSave, toEpochMs(wtdRange.start)),
-      mtd: windowValues(mtdStats, caMtd, mtdLoss, mtdSave, toEpochMs(mtdRange.start)),
-      ytd: windowValues(ytdStats, caYtd, ytdLoss, ytdSave, toEpochMs(ytdRange.start)),
+      mtd: opts?.fast ? zeroWindow : windowValues(mtdStats, caMtd, mtdLoss, mtdSave, toEpochMs(mtdRange.start)),
+      ytd: opts?.fast ? zeroWindow : windowValues(ytdStats, caYtd, ytdLoss, ytdSave, toEpochMs(ytdRange.start)),
     };
 
     const workbook = new Workbook();
     workbook.creator = 'HMEL Steamtrap Reports';
     workbook.created = generatedAt;
-    const logoImageId = workbook.addImage({ base64: HMEL_LOGO_BASE64, extension: 'png' });
+    const logoImageId = workbook.addImage({ base64: HMEL_LOGO_DAILY_BASE64, extension: 'png' });
 
+    const summarySheet = workbook.addWorksheet('Summary');
     buildDailySummarySheet(
-      workbook.addWorksheet('Summary'),
+      summarySheet,
       unitName,
       derivePlantCategory(unitName),
       unitDevices,
@@ -249,8 +273,19 @@ export async function generateDailyReportWorkbooks(
       periods,
       logoImageId,
     );
-    buildDailyAnalysisSheet(workbook.addWorksheet('Analysis'), analysisRows);
-    buildDailyLiveStatusSheet(workbook.addWorksheet('Live Status'), liveStatusRows);
+    const analysisSheet = workbook.addWorksheet('Analysis');
+    buildDailyAnalysisSheet(analysisSheet, analysisRows);
+    const liveStatusSheet = workbook.addWorksheet('Live Status');
+    buildDailyLiveStatusSheet(liveStatusSheet, liveStatusRows);
+
+    // Print setup (affects printing only): A3 landscape, all columns on one page wide, header row
+    // repeated on every page for the long device tables. The printed page title is the report name
+    // ("Steam Trap Daily Report–<Unit>"); the report date is the report's own date.
+    const reportDate = formatReportDate(range.end);
+    const title = `Steam Trap Daily Report–${unitName.trim()}`;
+    applyPrintLayout(summarySheet, { reportDate, title });
+    applyPrintLayout(analysisSheet, { reportDate, title, repeatHeaderRow: 1 });
+    applyPrintLayout(liveStatusSheet, { reportDate, title, repeatHeaderRow: 1 });
 
     reports.push({
       unitName,

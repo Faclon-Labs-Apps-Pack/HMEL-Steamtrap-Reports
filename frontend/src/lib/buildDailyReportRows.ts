@@ -13,6 +13,8 @@ export interface DailyAnalysisRow {
   id: string;
   srNo: number;
   devID: string;
+  /** The device's friendly name (its "Tag No" in the report, e.g. "510-HPST-001"). */
+  devName: string;
   location: string;
   department: string;
   currentStatus: LastDataPoint['value'] | undefined;
@@ -32,6 +34,8 @@ export interface DailyLiveStatusRow {
   id: string;
   srNo: number;
   devID: string;
+  /** The device's friendly name (its "Tag No" in the report). */
+  devName: string;
   location: string;
   department: string;
   inletPressure: string;
@@ -69,6 +73,7 @@ export function buildDailyAnalysisRows(
       id: device.devID,
       srNo: index + 1,
       devID: device.devID,
+      devName: device.devName,
       location: locationFor(device, properties),
       department: extractDepartmentFromTags(device.tags) ?? UNASSIGNED,
       currentStatus: statusByDevID.get(device.devID),
@@ -104,6 +109,7 @@ export function buildDailyLiveStatusRows(
       id: device.devID,
       srNo: index + 1,
       devID: device.devID,
+      devName: device.devName,
       location: locationFor(device, properties),
       department: extractDepartmentFromTags(device.tags) ?? UNASSIGNED,
       inletPressure: properties?.inletPressure || 'N/A',

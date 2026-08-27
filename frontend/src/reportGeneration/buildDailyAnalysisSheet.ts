@@ -38,6 +38,7 @@ function formatStatusDuration(pct: number, durationHours: number): string {
 
 const HEADERS = [
   'Sr No',
+  'Tag No',
   'Device ID',
   'Location',
   'Department',
@@ -47,19 +48,24 @@ const HEADERS = [
   'Change in Status',
   'Number of Corrective Actions',
   'Number of Feedbacks',
-  'Leak Rate',
-  'Cost of Steam',
-  'Saving',
-  'Loss',
+  'Leak Rate (Kg/hr)',
+  'Cost of Steam (INR/MT)',
+  'Saving (MT)',
+  'Loss (MT)',
 ];
 
+/** Parses a property string ("0.5", "2473", "N/A") to a number; non-numeric -> '' so the cell is blank, not text. */
+function toNumber(value: string): number | string {
+  const n = parseFloat(value);
+  return Number.isFinite(n) ? n : '';
+}
+
 /**
- * Populates the Daily Report's "Analysis" sheet — one row per device. Leak Rate and Cost of
- * Steam are real (device `properties`, confirmed live); there's no separate "Name" field
- * distinct from Device ID in real data (the source template's short codes like "510-HPST-001"
- * don't exist here), so that column is dropped rather than duplicating Device ID under a
- * different header. Per-status values show TIME SPENT in each status as hh:mm:ss (share of S1
- * readings × the analysis window), not percentages, per explicit client request.
+ * Populates the Daily Report's "Analysis" sheet — one row per device. "Tag No" is the device's
+ * friendly name (`devName`, e.g. "510-HPST-001"); "Device ID" is the raw STM_… id. Leak Rate and
+ * Cost of Steam are real (device `properties`, confirmed live). Per-status values show TIME SPENT
+ * in each status as hh:mm:ss (share of S1 readings × the analysis window), not percentages, per
+ * explicit client request.
  */
 export function buildDailyAnalysisSheet(sheet: Worksheet, rows: DailyAnalysisRow[]): void {
   const LOCATION_COL = HEADERS.indexOf('Location');
@@ -67,6 +73,7 @@ export function buildDailyAnalysisSheet(sheet: Worksheet, rows: DailyAnalysisRow
     const status = classifyStatus(row.currentStatus);
     return [
       row.srNo,
+      row.devName,
       row.devID,
       row.location,
       row.department,
@@ -81,15 +88,17 @@ export function buildDailyAnalysisSheet(sheet: Worksheet, rows: DailyAnalysisRow
       row.statusChangeCount,
       row.correctiveActionCount,
       row.feedbackCount,
-      row.leakRate,
-      row.costOfSteam,
-      Number(row.steamSaving.toFixed(2)),
-      Number(row.steamLoss.toFixed(2)),
+      toNumber(row.leakRate),
+      toNumber(row.costOfSteam),
+      Number((row.steamSaving || 0).toFixed(2)),
+      Number((row.steamLoss || 0).toFixed(2)),
     ];
   });
 
-  // Size every column to its widest value (Location can grow further since descriptions are long).
-  sheet.columns = fitColumnWidths(HEADERS, rowValues, { min: 12, max: 34, maxByCol: { [LOCATION_COL]: 60 } });
+  // Size every column to its widest value. Location holds long descriptions, so it's capped tighter
+  // and wrapped (below) — that keeps every column inside one A3-landscape page width when printed
+  // instead of a single runaway column forcing the print scale tiny.
+  sheet.columns = fitColumnWidths(HEADERS, rowValues, { min: 12, max: 30, maxByCol: { [LOCATION_COL]: 40 } });
   // Keep the header row visible while scrolling through the device rows, per explicit client request.
   sheet.views = [{ state: 'frozen', ySplit: 1 }];
 
@@ -99,15 +108,19 @@ export function buildDailyAnalysisSheet(sheet: Worksheet, rows: DailyAnalysisRow
     cell.font = HEADER_FONT;
     cell.fill = BLUE_HEADER_FILL;
     cell.border = ALL_BORDERS;
+    cell.alignment = { vertical: 'middle', wrapText: true };
   });
 
+  const LOCATION_CELL = LOCATION_COL + 1; // eachCell colNumber is 1-based
   rows.forEach((row, i) => {
     const status = classifyStatus(row.currentStatus);
     const excelRow = sheet.getRow(i + 2);
     excelRow.values = rowValues[i];
-    excelRow.eachCell((cell) => {
+    excelRow.eachCell((cell, colNumber) => {
       cell.border = ALL_BORDERS;
       if (status !== 'Normal') cell.font = RED_FONT;
+      // Wrap the long Location text so the column stays narrow and all columns fit one page wide.
+      if (colNumber === LOCATION_CELL) cell.alignment = { vertical: 'top', wrapText: true };
     });
   });
 }

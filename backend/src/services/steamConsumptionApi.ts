@@ -57,7 +57,10 @@ async function getSteamConsumptionCustom(
     throw new ApiError('Failed to fetch steam consumption from IOsense.');
   }
 
-  return body.data.steamConsumption / 1000; // API returns KG; reports use MT
+  // The endpoint omits/nulls `steamConsumption` for a device with no loss/saving data in the
+  // window — `undefined / 1000` would be NaN and poison every cell/total it feeds, so default to 0.
+  const kg = body.data.steamConsumption;
+  return typeof kg === 'number' && Number.isFinite(kg) ? kg / 1000 : 0; // API returns KG; reports use MT
 }
 
 /**

@@ -17,7 +17,7 @@ import {
   type DateRange,
 } from '../lib/dateRange';
 import { weeklyReportName, weeklyReportFileName } from '../lib/reportNaming';
-import { HMEL_LOGO_BASE64 } from './hmelLogo';
+import { HMEL_LOGO_WEEKLY_BASE64 } from './hmelLogo';
 import {
   buildWeeklyStatusSheet,
   WEEKLY_STATUS_GROUPS,
@@ -26,6 +26,7 @@ import {
   type WeeklyUnitStatusRow,
   type WeeklyUnitCARow,
 } from './buildWeeklyStatusSheet';
+import { applyPrintLayout, formatReportDate } from './printLayout';
 import type { Device, LastDataPoint } from '../types/device';
 
 const STEAM_TRAP_DEVICE_TYPE = 'steam trap';
@@ -197,10 +198,11 @@ export async function generateManagementReportWorkbooks(
     const workbook = new Workbook();
     workbook.creator = 'HMEL Steamtrap Reports';
     workbook.created = generatedAt;
-    const logoImageId = workbook.addImage({ base64: HMEL_LOGO_BASE64, extension: 'png' });
+    const logoImageId = workbook.addImage({ base64: HMEL_LOGO_WEEKLY_BASE64, extension: 'png' });
 
+    const statusSheet = workbook.addWorksheet(`Steam Trap Status-${categoryName}`.slice(0, 31));
     buildWeeklyStatusSheet(
-      workbook.addWorksheet(`Steam Trap Status-${categoryName}`.slice(0, 31)),
+      statusSheet,
       categoryName,
       range,
       generatedAt,
@@ -209,6 +211,13 @@ export async function generateManagementReportWorkbooks(
       caRows,
       logoImageId,
     );
+    // Print setup (printing only): A3 landscape, all columns on one page wide. No repeated header
+    // row here — the sheet stacks two tables (Status + Corrective Action) with different headers.
+    // The printed page title is the report name ("Steam Trap Weekly Report–<Category>").
+    applyPrintLayout(statusSheet, {
+      reportDate: formatReportDate(range.end),
+      title: `Steam Trap Weekly Report–${categoryName.trim()}`,
+    });
 
     reports.push({
       categoryName,

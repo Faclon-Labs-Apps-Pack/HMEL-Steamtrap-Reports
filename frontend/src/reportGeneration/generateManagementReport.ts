@@ -1,4 +1,6 @@
-import { Workbook } from 'exceljs';
+import ExcelJS from 'exceljs';
+const { Workbook } = ExcelJS;
+type Workbook = InstanceType<typeof Workbook>;
 import { findDevicesByType, getLastDataPoints } from '../services/iosenseApi';
 import { getCorrectiveActions, type CorrectiveActionRecord } from '../services/correctiveActionApi';
 import { getTimeSeriesStatsByDevice, type DeviceTimeSeriesStats } from '../services/deviceTimeSeriesStats';
@@ -15,7 +17,7 @@ import {
   type DateRange,
 } from '../lib/dateRange';
 import { weeklyReportName, weeklyReportFileName } from '../lib/reportNaming';
-import { HMEL_LOGO_BASE64 } from './hmelLogo';
+import { HMEL_LOGO_WEEKLY_BASE64 } from './hmelLogo';
 import {
   buildWeeklyStatusSheet,
   WEEKLY_STATUS_GROUPS,
@@ -24,6 +26,7 @@ import {
   type WeeklyUnitStatusRow,
   type WeeklyUnitCARow,
 } from './buildWeeklyStatusSheet';
+import { applyPrintLayout, formatReportDate } from './printLayout';
 import type { Device, LastDataPoint } from '../types/device';
 
 const STEAM_TRAP_DEVICE_TYPE = 'steam trap';
@@ -37,7 +40,7 @@ export interface ManagementReportProgress {
 
 export interface WeeklyCategoryReport {
   categoryName: string;
-  /** e.g. 'Steam Trap Weekly Report–Refinery-26/07/26'. */
+  /** e.g. 'Steam Trap Weekly Report–Refinery-26/07/26' — also the email subject. */
   reportName: string;
   fileName: string;
   workbook: Workbook;
@@ -45,11 +48,13 @@ export interface WeeklyCategoryReport {
 
 const unitOf = (d: Device) => extractDepartmentFromTags(d.tags) ?? UNASSIGNED;
 
+/** Overall Trap Health of a device set over a window: average share of S1 readings classified Normal (a device with no readings counts as 0%). */
 function healthPct(devices: Device[], stats: Map<string, DeviceTimeSeriesStats>): number {
   if (devices.length === 0) return 0;
   return devices.reduce((s, d) => s + (stats.get(d.devID)?.statusPercentages.Normal ?? 0), 0) / devices.length;
 }
 
+/** Grouped, instantaneous status counts (WEEKLY_STATUS_GROUPS labels) for one unit's devices. */
 function groupedStatusCounts(devices: Device[], statusByDevID: Map<string, number | string>): WeeklyUnitStatusRow['counts'] {
   const counts = Object.fromEntries(WEEKLY_STATUS_GROUPS.map((g) => [g.label, 0])) as Record<string, number>;
   for (const d of devices) {
@@ -60,14 +65,15 @@ function groupedStatusCounts(devices: Device[], statusByDevID: Map<string, numbe
   return counts;
 }
 
-function withinWindow(iso: string, startMs: number, endMs: number): boolean {
-  const t = new Date(iso).getTime();
-  return t >= startMs && t <= endMs;
-}
-
+/** Corrective-action records for a device set, counted within a window by `dateAndTime`. */
 function countCA(devices: Device[], records: CorrectiveActionRecord[], startMs: number, endMs: number): number {
   const devIDs = new Set(devices.map((d) => d.devID));
   return records.filter((r) => devIDs.has(r.devId) && withinWindow(r.dateAndTime, startMs, endMs)).length;
+}
+
+function withinWindow(iso: string, startMs: number, endMs: number): boolean {
+  const t = new Date(iso).getTime();
+  return t >= startMs && t <= endMs;
 }
 
 /**
@@ -99,13 +105,16 @@ function categoryUnitRows(categoryName: string, catDevices: Device[]): { display
 }
 
 /**
- * Builds the weekly Management Report — ONE WORKBOOK PER PLANT CATEGORY, each a single
- * "Steam Trap Status-<Category>" sheet listing that category's units as rows, matching the
- * client reference ("Steam Trap Weekly Report-Refinery 26-07-2026.xlsx"). Mirrors the backend's
- * generateManagementReport.ts — keep the two in sync.
+ * Builds the weekly Management Report — ONE WORKBOOK PER PLANT CATEGORY (Refinery / Petchem /
+ * …), each a single "Steam Trap Status-<Category>" sheet listing that category's units as rows,
+ * matching the client reference ("Steam Trap Weekly Report-Refinery 26-07-2026.xlsx").
+ *
+ * Windows all end at the reported week's end (range.end): WTD = the reported Mon-Sun week,
+ * MTD = that month up to range.end, YTD = the financial year (from Apr 1) up to range.end.
  */
 export async function generateManagementReportWorkbooks(
   onProgress?: (progress: ManagementReportProgress) => void,
+  opts?: { categories?: string[] },
 ): Promise<WeeklyCategoryReport[]> {
   const report = (label: string) => onProgress?.({ label });
 
@@ -136,8 +145,8 @@ export async function generateManagementReportWorkbooks(
   // One report per client-defined plant category (Refinery, Petchem) — always both, even if a
   // category has no devices this week. Devices that don't classify into either (untagged in
   // IOsense, or an unknown unit) are surfaced as a warning, not shipped as an "Unassigned" report.
-  const categoryNames = Object.keys(CATEGORY_UNIT_ROSTER);
-  const unclassified = devices.filter((d) => !categoryNames.includes(derivePlantCategory(unitOf(d))));
+  const categoryNames = Object.keys(CATEGORY_UNIT_ROSTER).filter((c) => !opts?.categories || opts.categories.includes(c));
+  const unclassified = devices.filter((d) => !Object.keys(CATEGORY_UNIT_ROSTER).includes(derivePlantCategory(unitOf(d))));
   if (unclassified.length > 0) {
     console.warn(
       `[weekly] ${unclassified.length} device(s) are not in ${categoryNames.join('/')} (missing/unknown department tag) — excluded from all reports. ` +
@@ -189,10 +198,11 @@ export async function generateManagementReportWorkbooks(
     const workbook = new Workbook();
     workbook.creator = 'HMEL Steamtrap Reports';
     workbook.created = generatedAt;
-    const logoImageId = workbook.addImage({ base64: HMEL_LOGO_BASE64, extension: 'png' });
+    const logoImageId = workbook.addImage({ base64: HMEL_LOGO_WEEKLY_BASE64, extension: 'png' });
 
+    const statusSheet = workbook.addWorksheet(`Steam Trap Status-${categoryName}`.slice(0, 31));
     buildWeeklyStatusSheet(
-      workbook.addWorksheet(`Steam Trap Status-${categoryName}`.slice(0, 31)),
+      statusSheet,
       categoryName,
       range,
       generatedAt,
@@ -201,6 +211,13 @@ export async function generateManagementReportWorkbooks(
       caRows,
       logoImageId,
     );
+    // Print setup (printing only): A3 landscape, all columns on one page wide. No repeated header
+    // row here — the sheet stacks two tables (Status + Corrective Action) with different headers.
+    // The printed page title is the report name ("Steam Trap Weekly Report–<Category>").
+    applyPrintLayout(statusSheet, {
+      reportDate: formatReportDate(range.end),
+      title: `Steam Trap Weekly Report–${categoryName.trim()}`,
+    });
 
     reports.push({
       categoryName,

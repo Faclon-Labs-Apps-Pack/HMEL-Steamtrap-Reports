@@ -148,13 +148,25 @@ async function fetchBulkTimeSeriesBatch(
   endMs: number,
   downscale: number,
 ): Promise<Map<string, TimeSeriesPoint[]>> {
-  const response = await fetch(`${API_BASE}/account/widget/getAutoDownSampledData`, {
-    method: 'PUT',
-    headers: authHeaders(),
-    body: JSON.stringify({
-      devConfig: pairs.map((p) => ({ devID: p.devID, sensor: p.sensor, sTime: startMs, eTime: endMs, downscale })),
-    }),
-  });
+  // Hard request timeout: IOsense intermittently holds a connection open without responding, and
+  // fetch() has no built-in timeout — one such hang would stall the whole report forever (the
+  // retry below never fires because the promise never settles). Abort after 30s so it throws and
+  // the caller's retry recovers.
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30_000);
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}/account/widget/getAutoDownSampledData`, {
+      method: 'PUT',
+      headers: authHeaders(),
+      signal: controller.signal,
+      body: JSON.stringify({
+        devConfig: pairs.map((p) => ({ devID: p.devID, sensor: p.sensor, sTime: startMs, eTime: endMs, downscale })),
+      }),
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
 
   const rawText = await response.text();
   let body: GetAutoDownSampledResponse;

@@ -4,6 +4,8 @@ import { OUTPUT_DIR } from '../config';
 
 export interface PendingEmail {
   reportType: 'weekly' | 'daily';
+  /** The unit (daily) or plant category (weekly) this report is for — used in the send log. */
+  section: string;
   fileName: string;
   downloadUrl: string;
   recipients: string[];
