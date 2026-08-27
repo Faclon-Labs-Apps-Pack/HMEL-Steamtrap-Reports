@@ -41,7 +41,7 @@ const HEADERS = [
   'Tag No',
   'Device ID',
   'Location',
-  'Department',
+  'Unit',
   'Current Status',
   'Duration (hrs)',
   ...ANALYSIS_STATUS_GROUPS.map((g) => g.label),

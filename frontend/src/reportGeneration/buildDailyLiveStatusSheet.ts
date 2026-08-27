@@ -7,7 +7,7 @@ const HEADERS = [
   'Tag No',
   'Device ID',
   'Location',
-  'Department',
+  'Unit',
   'Inlet Pressure (kg/cm²)',
   'Outlet Pressure (kg/cm²)',
   'Inlet BaseLine Temperature (°C)',
