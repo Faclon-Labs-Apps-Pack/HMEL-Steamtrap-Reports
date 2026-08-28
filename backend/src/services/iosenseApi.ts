@@ -115,12 +115,47 @@ const BULK_TIME_SERIES_BATCH_SIZE = 20;
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
+// IOsense enforces a DEVICE rate limit on getAutoDownSampledData: at most ~150 devices may be
+// requested per rolling 30-second window (confirmed live: "Device rate limit exceeded: 140 of 150
+// devices already requested in the current 30-second window … Retry after 22 seconds"). We
+// self-throttle a margin under that so we never trip it. This budget is MODULE-LEVEL on purpose —
+// it is shared across ALL concurrent report runs (the weekly and daily reports fire together and
+// share the same server-side window), so a per-call limiter wouldn't be enough. This does NOT drop
+// any devices — every device is still fetched; the requests are just paced over time.
+const RATE_LIMIT_MAX_DEVICES = 140;
+const RATE_LIMIT_WINDOW_MS = 30_000;
+const rateWindow: { at: number; devices: number }[] = [];
+
+/** Blocks until requesting `deviceCount` more devices stays within the 30s device-rate budget. */
+async function acquireDeviceRateBudget(deviceCount: number): Promise<void> {
+  // A single batch (≤20) never exceeds the cap (140), so this always eventually clears.
+  for (;;) {
+    const now = Date.now();
+    while (rateWindow.length > 0 && now - rateWindow[0].at >= RATE_LIMIT_WINDOW_MS) rateWindow.shift();
+    const used = rateWindow.reduce((sum, r) => sum + r.devices, 0);
+    if (used + deviceCount <= RATE_LIMIT_MAX_DEVICES) {
+      // No await between reading `used` and pushing → atomic vs other concurrent callers.
+      rateWindow.push({ at: now, devices: deviceCount });
+      return;
+    }
+    const waitMs = RATE_LIMIT_WINDOW_MS - (now - rateWindow[0].at) + 50;
+    await sleep(waitMs);
+  }
+}
+
+/** If an error carries the API's "Retry after N seconds" hint, returns that in ms (else null). */
+function parseRetryAfterMs(err: unknown): number | null {
+  const msg = err instanceof Error ? err.message : String(err);
+  const m = /Retry after (\d+)\s*seconds?/i.exec(msg);
+  return m ? Number(m[1]) * 1000 + 500 : null; // +0.5s cushion past the server's window
+}
+
 /**
- * Fetches one batch with retry + exponential backoff. The getAutoDownSampledData endpoint
- * intermittently returns HTTP 200 `{"success":false}` under load — confirmed live: a batch that
- * failed then succeeded on immediate retry, and its devices all succeeded individually. It's a
- * transient rate-limit, not bad data, so retrying recovers it. (The scheduler firing all three
- * reports at once multiplies the load, which is why this surfaced.)
+ * Fetches one batch with retry. Two failure modes are handled: (1) the endpoint intermittently
+ * returns HTTP 200 `{"success":false}` under load (transient — a plain retry recovers it), and
+ * (2) the device rate limit, which the proactive throttle (acquireDeviceRateBudget) should
+ * prevent, but if it still fires we honor the server's "Retry after N seconds" hint instead of the
+ * short exponential backoff.
  */
 async function fetchBulkTimeSeriesBatchWithRetry(
   pairs: { devID: string; sensor: string }[],
@@ -135,7 +170,10 @@ async function fetchBulkTimeSeriesBatchWithRetry(
       return await fetchBulkTimeSeriesBatch(pairs, startMs, endMs, downscale);
     } catch (err) {
       lastError = err;
-      if (attempt < attempts - 1) await sleep(500 * 2 ** attempt); // 0.5s, 1s, 2s, 4s
+      if (attempt < attempts - 1) {
+        const retryAfter = parseRetryAfterMs(err);
+        await sleep(retryAfter ?? 500 * 2 ** attempt); // honor "Retry after Ns", else 0.5s,1s,2s,4s
+      }
     }
   }
   throw lastError;
@@ -148,6 +186,10 @@ async function fetchBulkTimeSeriesBatch(
   endMs: number,
   downscale: number,
 ): Promise<Map<string, TimeSeriesPoint[]>> {
+  // Stay within the server's device rate limit (≤150 devices / 30s) — blocks here if needed so we
+  // never trip it. Shared across all concurrent report runs.
+  await acquireDeviceRateBudget(pairs.length);
+
   // Hard request timeout: IOsense intermittently holds a connection open without responding, and
   // fetch() has no built-in timeout — one such hang would stall the whole report forever (the
   // retry below never fires because the promise never settles). Abort after 30s so it throws and
