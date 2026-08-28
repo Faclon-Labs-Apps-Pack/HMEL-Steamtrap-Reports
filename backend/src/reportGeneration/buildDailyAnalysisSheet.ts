@@ -1,7 +1,7 @@
 import type { Worksheet } from 'exceljs';
 import { classifyStatus, type StatusColumn } from '../lib/statusClassification';
 import type { DailyAnalysisRow } from '../lib/buildDailyReportRows';
-import { ALL_BORDERS, BLUE_HEADER_FILL, HEADER_FONT, RED_FONT, fitColumnWidths } from './xlsxStyles';
+import { ALL_BORDERS, BLUE_HEADER_FILL, HEADER_FONT, RED_FONT, fitColumnWidths, estimateHeaderHeight } from './xlsxStyles';
 
 /**
  * Status columns for the Analysis sheet, with Mild/Heavy Flooding combined into "Flooding" and
@@ -38,10 +38,10 @@ function formatStatusDuration(pct: number, durationHours: number): string {
 
 const HEADERS = [
   'Sr No',
+  'Unit',
   'Tag No',
   'Device ID',
   'Location',
-  'Unit',
   'Current Status',
   'Duration (hrs)',
   ...ANALYSIS_STATUS_GROUPS.map((g) => g.label),
@@ -73,10 +73,10 @@ export function buildDailyAnalysisSheet(sheet: Worksheet, rows: DailyAnalysisRow
     const status = classifyStatus(row.currentStatus);
     return [
       row.srNo,
+      row.department,
       row.devName,
       row.devID,
       row.location,
-      row.department,
       displayStatus(status),
       Number(row.durationHours.toFixed(1)),
       ...ANALYSIS_STATUS_GROUPS.map((g) =>
@@ -95,32 +95,38 @@ export function buildDailyAnalysisSheet(sheet: Worksheet, rows: DailyAnalysisRow
     ];
   });
 
-  // Size every column to its widest value. Location holds long descriptions, so it's capped tighter
-  // and wrapped (below) — that keeps every column inside one A3-landscape page width when printed
-  // instead of a single runaway column forcing the print scale tiny.
-  sheet.columns = fitColumnWidths(HEADERS, rowValues, { min: 12, max: 30, maxByCol: { [LOCATION_COL]: 40 } });
+  // Column widths come from the DATA, not the (often long) headings — headings wrap instead of
+  // widening a column. Location is capped tighter and wraps. This keeps every column inside one
+  // A3-landscape page width when printed and stays readable on screen.
+  sheet.columns = fitColumnWidths(HEADERS, rowValues, {
+    min: 5,
+    max: 30,
+    maxByCol: { [LOCATION_COL]: 40 },
+    dataDriven: true,
+  });
   // Keep the header row visible while scrolling through the device rows, per explicit client request.
   sheet.views = [{ state: 'frozen', ySplit: 1 }];
 
   const headerRow = sheet.getRow(1);
   headerRow.values = HEADERS;
+  headerRow.height = estimateHeaderHeight(HEADERS, sheet.columns as { width: number }[]);
   headerRow.eachCell((cell) => {
     cell.font = HEADER_FONT;
     cell.fill = BLUE_HEADER_FILL;
     cell.border = ALL_BORDERS;
-    cell.alignment = { vertical: 'middle', wrapText: true };
+    cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
   });
 
-  const LOCATION_CELL = LOCATION_COL + 1; // eachCell colNumber is 1-based
   rows.forEach((row, i) => {
     const status = classifyStatus(row.currentStatus);
     const excelRow = sheet.getRow(i + 2);
     excelRow.values = rowValues[i];
-    excelRow.eachCell((cell, colNumber) => {
+    // Wrap every cell so long text (Unit / Tag / Device ID / Location) wraps instead of widening the
+    // column; row height auto-fits to the wrapped content when the file is opened.
+    excelRow.eachCell((cell) => {
       cell.border = ALL_BORDERS;
+      cell.alignment = { vertical: 'top', wrapText: true };
       if (status !== 'Normal') cell.font = RED_FONT;
-      // Wrap the long Location text so the column stays narrow and all columns fit one page wide.
-      if (colNumber === LOCATION_CELL) cell.alignment = { vertical: 'top', wrapText: true };
     });
   });
 }

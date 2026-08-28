@@ -29,13 +29,46 @@ export const BOLD_FONT = { bold: true };
 export function fitColumnWidths(
   headers: string[],
   rows: (string | number | null | undefined)[][],
-  opts: { min?: number; max?: number; maxByCol?: Record<number, number> } = {},
+  opts: { min?: number; max?: number; maxByCol?: Record<number, number>; dataDriven?: boolean } = {},
 ): { width: number }[] {
-  const { min = 10, max = 32, maxByCol = {} } = opts;
+  const { min = 10, max = 32, maxByCol = {}, dataDriven = false } = opts;
   const len = (v: string | number | null | undefined) => (v === null || v === undefined ? 0 : String(v).length);
+  const longestWord = (s: string) => Math.max(0, ...String(s).split(/\s+/).map((w) => w.length));
   return headers.map((h, col) => {
-    const longest = Math.max(len(h), ...rows.map((r) => len(r[col])));
+    const dataLongest = Math.max(0, ...rows.map((r) => len(r[col])));
     const cap = maxByCol[col] ?? max;
-    return { width: Math.min(cap, Math.max(min, longest + 2)) };
+    // dataDriven: size from the DATA, not the heading (headings wrap between words) — but never
+    // narrower than the heading's longest single word, which cannot wrap. Otherwise: widest of the two.
+    const target = dataDriven
+      ? Math.max(dataLongest + 2, longestWord(h) + 1)
+      : Math.max(len(h), dataLongest) + 2;
+    return { width: Math.min(cap, Math.max(min, target)) };
   });
+}
+
+/**
+ * Estimated height (points) for a wrapped header row: greedily word-wraps each heading to its
+ * column width, and returns the tallest column's line count × lineHeight — so multi-line headings
+ * aren't clipped in viewers that don't auto-fit.
+ */
+export function estimateHeaderHeight(
+  headers: string[],
+  columns: { width: number }[],
+  lineHeight = 15,
+): number {
+  const linesFor = (text: string, width: number) => {
+    let lines = 1;
+    let cur = 0;
+    for (const w of String(text).split(/\s+/)) {
+      if (cur === 0) cur = w.length;
+      else if (cur + 1 + w.length <= width) cur += 1 + w.length;
+      else {
+        lines++;
+        cur = w.length;
+      }
+    }
+    return lines;
+  };
+  const maxLines = Math.max(1, ...headers.map((h, i) => linesFor(h, columns[i]?.width ?? 10)));
+  return maxLines * lineHeight;
 }

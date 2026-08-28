@@ -1,13 +1,13 @@
 import type { Worksheet } from 'exceljs';
 import type { DailyLiveStatusRow } from '../lib/buildDailyReportRows';
-import { ALL_BORDERS, BLUE_HEADER_FILL, HEADER_FONT, fitColumnWidths } from './xlsxStyles';
+import { ALL_BORDERS, BLUE_HEADER_FILL, HEADER_FONT, fitColumnWidths, estimateHeaderHeight } from './xlsxStyles';
 
 const HEADERS = [
   'Sr No',
+  'Unit',
   'Tag No',
   'Device ID',
   'Location',
-  'Unit',
   'Inlet Pressure (kg/cm²)',
   'Outlet Pressure (kg/cm²)',
   'Inlet BaseLine Temperature (°C)',
@@ -39,10 +39,10 @@ export function buildDailyLiveStatusSheet(sheet: Worksheet, rows: DailyLiveStatu
   const LOCATION_COL = HEADERS.indexOf('Location');
   const rowValues = rows.map((row) => [
     row.srNo,
+    row.department,
     row.devName,
     row.devID,
     row.location,
-    row.department,
     toNumber(row.inletPressure),
     toNumber(row.outletPressure),
     toNumber(row.baseLineInletTemperature),
@@ -52,27 +52,35 @@ export function buildDailyLiveStatusSheet(sheet: Worksheet, rows: DailyLiveStatu
     row.status,
   ]);
 
-  // Size every column to its widest value. Location holds long descriptions, so it's capped tighter
-  // and wrapped (below) so all columns stay inside one A3-landscape page width when printed.
-  sheet.columns = fitColumnWidths(HEADERS, rowValues, { min: 12, max: 30, maxByCol: { [LOCATION_COL]: 40 } });
+  // Column widths come from the DATA, not the (often long) headings — short numeric columns stay
+  // compact and headings wrap. Location is capped tighter and wraps. Keeps all columns inside one
+  // A3-landscape page width.
+  sheet.columns = fitColumnWidths(HEADERS, rowValues, {
+    min: 5,
+    max: 30,
+    maxByCol: { [LOCATION_COL]: 40 },
+    dataDriven: true,
+  });
   sheet.views = [{ state: 'frozen', ySplit: 1 }];
 
   const headerRow = sheet.getRow(1);
   headerRow.values = HEADERS;
+  headerRow.height = estimateHeaderHeight(HEADERS, sheet.columns as { width: number }[]);
   headerRow.eachCell((cell) => {
     cell.font = HEADER_FONT;
     cell.fill = BLUE_HEADER_FILL;
     cell.border = ALL_BORDERS;
-    cell.alignment = { vertical: 'middle', wrapText: true };
+    cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
   });
 
-  const LOCATION_CELL = LOCATION_COL + 1; // eachCell colNumber is 1-based
   rowValues.forEach((values, i) => {
     const excelRow = sheet.getRow(i + 2);
     excelRow.values = values;
-    excelRow.eachCell((cell, colNumber) => {
+    // Wrap every cell so long text (Unit / Tag / Device ID / Location) wraps instead of widening the
+    // column; row height auto-fits to the wrapped content when the file is opened.
+    excelRow.eachCell((cell) => {
       cell.border = ALL_BORDERS;
-      if (colNumber === LOCATION_CELL) cell.alignment = { vertical: 'top', wrapText: true };
+      cell.alignment = { vertical: 'top', wrapText: true };
     });
   });
 }

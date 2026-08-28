@@ -20,6 +20,33 @@ export function formatReportDate(d: Date): string {
  *    SHEET NAME (`&A`);
  *  - page footer = the report date (left) and "Page X of Y" (`&P of &N`, right), on every page.
  */
+/**
+ * Print setup for the DAILY Summary sheet ONLY — a deliberately different layout from Analysis/Live
+ * Status: A4 portrait, the WHOLE sheet scaled to fit on exactly one page (fitToWidth 1 + fitToHeight
+ * 1), and NO print header or footer at all (no title, no sheet name, no date, no page number).
+ */
+export function applySummaryPrintLayout(sheet: Worksheet): void {
+  sheet.pageSetup = {
+    ...sheet.pageSetup,
+    paperSize: 9, // A4
+    orientation: 'portrait',
+    fitToPage: true,
+    fitToWidth: 1,
+    fitToHeight: 1, // whole Summary on exactly one page — no extra pages across or down
+    horizontalCentered: true,
+    margins: { left: 0.3, right: 0.3, top: 0.3, bottom: 0.3, header: 0, footer: 0 },
+  };
+  // Nothing in the print header/footer for the Summary.
+  sheet.headerFooter = {
+    oddHeader: '',
+    evenHeader: '',
+    oddFooter: '',
+    evenFooter: '',
+    firstHeader: '',
+    firstFooter: '',
+  };
+}
+
 export function applyPrintLayout(
   sheet: Worksheet,
   opts: { reportDate: string; repeatHeaderRow?: number; title?: string },

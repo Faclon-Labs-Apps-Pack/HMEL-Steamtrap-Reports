@@ -25,7 +25,7 @@ import { HMEL_LOGO_DAILY_BASE64 } from './hmelLogo';
 import { buildDailySummarySheet, type SummaryWindowValues } from './buildDailySummarySheet';
 import { buildDailyAnalysisSheet } from './buildDailyAnalysisSheet';
 import { buildDailyLiveStatusSheet } from './buildDailyLiveStatusSheet';
-import { applyPrintLayout, formatReportDate } from './printLayout';
+import { applyPrintLayout, applySummaryPrintLayout, formatReportDate } from './printLayout';
 import type { Device } from '../types/device';
 
 /** Restrict a device list to specific units (by env-key) — includes `unitKeys`, or all except `excludeUnitKeys`. */
@@ -278,12 +278,13 @@ export async function generateDailyReportWorkbooks(
     const liveStatusSheet = workbook.addWorksheet('Live Status');
     buildDailyLiveStatusSheet(liveStatusSheet, liveStatusRows);
 
-    // Print setup (affects printing only): A3 landscape, all columns on one page wide, header row
-    // repeated on every page for the long device tables. The printed page title is the report name
-    // ("Steam Trap Daily Report–<Unit>"); the report date is the report's own date.
+    // Print setup (printing only), dynamic per sheet so the layouts can never cross over:
+    //  - Summary: A4 portrait, whole sheet on exactly one page, no print header/footer at all.
+    //  - Analysis & Live Status: A3 landscape, all columns on one page wide, repeating header row,
+    //    report-name title, report date, and "Page X of Y" footer.
     const reportDate = formatReportDate(range.end);
     const title = `Steam Trap Daily Report–${unitName.trim()}`;
-    applyPrintLayout(summarySheet, { reportDate, title });
+    applySummaryPrintLayout(summarySheet);
     applyPrintLayout(analysisSheet, { reportDate, title, repeatHeaderRow: 1 });
     applyPrintLayout(liveStatusSheet, { reportDate, title, repeatHeaderRow: 1 });
 
