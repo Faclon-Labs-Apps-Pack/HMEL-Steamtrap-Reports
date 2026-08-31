@@ -4,6 +4,7 @@ import type { DateRange } from '../lib/dateRange';
 import type { Device, LastDataPoint } from '../types/device';
 import { ALL_BORDERS, BLUE_HEADER_FILL, BOLD_FONT, CENTER, HEADER_FONT, LEFT } from './xlsxStyles';
 import { HMEL_LOGO_DAILY_SIZE } from './hmelLogo';
+import { addLogoHeader } from './printLayout';
 
 /** Hardcoded per explicit request — not derived from device data. */
 const HARDCODED_COST_OF_STEAM = 2473;
@@ -89,9 +90,9 @@ export function buildDailySummarySheet(
   }
   const totalDevices = devices.length;
 
-  // --- Title block: logo on the left, two-line report title across the rest.
-  sheet.getRow(1).height = 24;
-  sheet.getRow(2).height = 24;
+  // --- Title block: logo on the left (constrained to header rows 1–2 — see addLogoHeader),
+  // two-line report title across the rest.
+  addLogoHeader(sheet, logoImageId, HMEL_LOGO_DAILY_SIZE, 'A1:A2', 24);
   sheet.mergeCells('B1:E2');
   const titleCell = sheet.getCell('B1');
   titleCell.value = 'Steam Traps Health Monitoring\nDaily Report';
@@ -99,10 +100,6 @@ export function buildDailySummarySheet(
   titleCell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
   // Title band is blue like the table headers (per the client mock); the logo cell stays white.
   titleCell.fill = BLUE_HEADER_FILL;
-  sheet.mergeCells('A1:A2');
-  // The logo image is a cell-sized white canvas with the HMEL mark centered on it, anchored to
-  // fill A1:A2 — so the mark reads as centered (ExcelJS's per-cell offset can't center reliably).
-  sheet.addImage(logoImageId, { tl: { col: 0, row: 0 }, ext: HMEL_LOGO_DAILY_SIZE });
   for (let r = 1; r <= 2; r++) {
     for (let c = 1; c <= 5; c++) sheet.getCell(r, c).border = ALL_BORDERS;
   }

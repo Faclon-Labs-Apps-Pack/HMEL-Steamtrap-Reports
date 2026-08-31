@@ -3,6 +3,7 @@ import type { StatusColumn } from '../lib/statusClassification';
 import type { DateRange } from '../lib/dateRange';
 import { ALL_BORDERS, BLUE_HEADER_FILL, BOLD_FONT, CENTER, LEFT } from './xlsxStyles';
 import { HMEL_LOGO_WEEKLY_SIZE } from './hmelLogo';
+import { addLogoHeader } from './printLayout';
 
 /** Hardcoded per explicit request — matches the "Rate of Steam" row shown in the client template. */
 const HARDCODED_COST_OF_STEAM = 2473;
@@ -108,21 +109,16 @@ export function buildWeeklyStatusSheet(
     if (bold) cell.font = BOLD_FONT;
   };
 
-  // --- Title block (rows 1-2), laid out like the Daily report: the HMEL logo in a wide, white
-  // A1:B2 cell (its PNG has a white background, so it blends) and the two-line title across
-  // C1:J2 on the blue band.
-  sheet.getRow(1).height = 26;
-  sheet.getRow(2).height = 26;
+  // --- Title block (rows 1-2), laid out like the Daily report: the HMEL logo in the white A1:B2
+  // cell (constrained to header rows 1–2 — see addLogoHeader) and the two-line title across C1:J2
+  // on the blue band.
+  addLogoHeader(sheet, logoImageId, HMEL_LOGO_WEEKLY_SIZE, 'A1:B2', 26);
   sheet.mergeCells('C1:J2');
   const title = sheet.getCell('C1');
   title.value = `${categoryName} Steam Traps Health Monitoring\nWeekly Report`;
   title.font = { bold: true, size: 14 };
   title.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
   title.fill = BLUE_HEADER_FILL;
-  sheet.mergeCells('A1:B2');
-  // The logo image is a cell-sized white canvas with the HMEL mark centered on it, anchored to
-  // fill A1:B2 — so the mark reads as centered (ExcelJS's per-cell offset can't center reliably).
-  sheet.addImage(logoImageId, { tl: { col: 0, row: 0 }, ext: HMEL_LOGO_WEEKLY_SIZE });
   for (let r = 1; r <= 2; r++) {
     for (let c = 1; c <= NUM_COLS; c++) sheet.getCell(r, c).border = ALL_BORDERS;
   }
