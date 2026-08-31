@@ -11,7 +11,12 @@ export const BLUE_HEADER_FILL: Fill = { type: 'pattern', pattern: 'solid', fgCol
 export const RED_FONT = { color: { argb: 'FFFF0000' } };
 
 export const THIN_BORDER: Partial<Border> = { style: 'thin', color: { argb: 'FF000000' } };
-export const ALL_BORDERS = { top: THIN_BORDER, left: THIN_BORDER, bottom: THIN_BORDER, right: THIN_BORDER };
+// Table borders use MEDIUM weight, not thin: Excel drops hairline/thin borders in print and print-
+// preview when the sheet is scaled to fit a page (or when "Draft quality" is on), which makes the
+// grid look like it disappears on paper even though it shows on screen (where gridlines mask it).
+// Medium lines survive that scaling, so the printed grid matches the on-screen design.
+export const MEDIUM_BORDER: Partial<Border> = { style: 'medium', color: { argb: 'FF000000' } };
+export const ALL_BORDERS = { top: MEDIUM_BORDER, left: MEDIUM_BORDER, bottom: MEDIUM_BORDER, right: MEDIUM_BORDER };
 
 export const CENTER: Partial<Alignment> = { horizontal: 'center', vertical: 'middle', wrapText: true };
 export const LEFT: Partial<Alignment> = { horizontal: 'left', vertical: 'middle', wrapText: true };

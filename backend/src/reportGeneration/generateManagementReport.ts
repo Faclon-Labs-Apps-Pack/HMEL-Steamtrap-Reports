@@ -26,7 +26,7 @@ import {
   type WeeklyUnitStatusRow,
   type WeeklyUnitCARow,
 } from './buildWeeklyStatusSheet';
-import { applyPrintLayout, formatReportDate } from './printLayout';
+import { applyWeeklyPrintLayout } from './printLayout';
 import type { Device, LastDataPoint } from '../types/device';
 
 const STEAM_TRAP_DEVICE_TYPE = 'steam trap';
@@ -211,13 +211,9 @@ export async function generateManagementReportWorkbooks(
       caRows,
       logoImageId,
     );
-    // Print setup (printing only): A3 landscape, all columns on one page wide. No repeated header
-    // row here — the sheet stacks two tables (Status + Corrective Action) with different headers.
-    // The printed page title is the report name ("Steam Trap Weekly Report–<Category>").
-    applyPrintLayout(statusSheet, {
-      reportDate: formatReportDate(range.end),
-      title: `Steam Trap Weekly Report–${categoryName.trim()}`,
-    });
+    // Print setup (printing only): A2 portrait, the ENTIRE report scaled onto one single page (all
+    // columns on one page across, all rows on one page down), with no print header/footer/page number.
+    applyWeeklyPrintLayout(statusSheet);
 
     reports.push({
       categoryName,

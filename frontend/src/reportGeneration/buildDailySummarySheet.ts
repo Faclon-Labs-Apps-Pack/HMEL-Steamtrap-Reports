@@ -92,7 +92,7 @@ export function buildDailySummarySheet(
 
   // --- Title block: logo on the left (constrained to header rows 1–2 — see addLogoHeader),
   // two-line report title across the rest.
-  addLogoHeader(sheet, logoImageId, HMEL_LOGO_DAILY_SIZE, 'A1:A2', 24);
+  addLogoHeader(sheet, logoImageId, HMEL_LOGO_DAILY_SIZE, 'A1:A2');
   sheet.mergeCells('B1:E2');
   const titleCell = sheet.getCell('B1');
   titleCell.value = 'Steam Traps Health Monitoring\nDaily Report';

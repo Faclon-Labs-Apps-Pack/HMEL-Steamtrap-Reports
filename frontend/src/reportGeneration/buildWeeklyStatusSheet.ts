@@ -80,13 +80,16 @@ export function buildWeeklyStatusSheet(
   logoImageId: number,
 ): void {
   // Data starts at column A (no left gutter): A = Sr.No/labels; B = Unit Name; C..I = 7 status
-  // columns; J = Total. A and C are a bit wider so Sr.No/labels and the first status/date column
-  // read comfortably.
+  // columns; J = Total. Widths are sized to the DATA, not the headings (headings wrap — CENTER/LEFT
+  // both enable wrapText): the status/Total columns hold small integer counts so they stay narrow,
+  // Unit Name (B) gets room for the longest unit and wraps if needed, and C stays a touch wider for
+  // the first status column and the date rows it also spans. Everything is scaled onto one A2
+  // portrait page by applyWeeklyPrintLayout, so these widths only govern proportions/readability.
   sheet.columns = [
-    { width: 12 },
-    { width: 16 },
-    { width: 15 },
-    ...Array.from({ length: 6 }, () => ({ width: 10 })),
+    { width: 11 },
+    { width: 18 },
+    { width: 14 },
+    ...Array.from({ length: 6 }, () => ({ width: 9 })),
     { width: 9 },
   ];
 
@@ -112,7 +115,7 @@ export function buildWeeklyStatusSheet(
   // --- Title block (rows 1-2), laid out like the Daily report: the HMEL logo in the white A1:B2
   // cell (constrained to header rows 1–2 — see addLogoHeader) and the two-line title across C1:J2
   // on the blue band.
-  addLogoHeader(sheet, logoImageId, HMEL_LOGO_WEEKLY_SIZE, 'A1:B2', 26);
+  addLogoHeader(sheet, logoImageId, HMEL_LOGO_WEEKLY_SIZE, 'A1:B2');
   sheet.mergeCells('C1:J2');
   const title = sheet.getCell('C1');
   title.value = `${categoryName} Steam Traps Health Monitoring\nWeekly Report`;
