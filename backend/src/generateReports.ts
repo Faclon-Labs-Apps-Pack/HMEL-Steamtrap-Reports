@@ -1,3 +1,4 @@
+import './setTimezone'; // MUST be first — pins the process to IST before any Date is created
 import { OUTPUT_DIR } from './config';
 import { generateManagementReportWorkbooks } from './reportGeneration/generateManagementReport';
 import { generateDailyReportWorkbooks } from './reportGeneration/generateDailyReport';

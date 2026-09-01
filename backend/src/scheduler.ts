@@ -1,3 +1,4 @@
+import './setTimezone'; // MUST be first — pins the process to IST before any Date is created
 import path from 'node:path';
 import { stat } from 'node:fs/promises';
 import {
