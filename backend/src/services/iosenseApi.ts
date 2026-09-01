@@ -115,20 +115,22 @@ const BULK_TIME_SERIES_BATCH_SIZE = 20;
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-// IOsense enforces a DEVICE rate limit on getAutoDownSampledData: at most ~150 devices may be
-// requested per rolling 30-second window (confirmed live: "Device rate limit exceeded: 140 of 150
-// devices already requested in the current 30-second window … Retry after 22 seconds"). We
-// self-throttle a margin under that so we never trip it. This budget is MODULE-LEVEL on purpose —
-// it is shared across ALL concurrent report runs (the weekly and daily reports fire together and
-// share the same server-side window), so a per-call limiter wouldn't be enough. This does NOT drop
-// any devices — every device is still fetched; the requests are just paced over time.
-const RATE_LIMIT_MAX_DEVICES = 140;
+// IOsense enforces a DEVICE rate limit on getAutoDownSampledData per rolling 30-second window. The
+// limit was tightened to 100 devices/30s (confirmed live 2026-09-01: "Device rate limit exceeded:
+// 100 of 100 devices already requested in the current 30-second window … Retry after 2 seconds").
+// We cap ourselves at 80 (= 4 batches of BULK_TIME_SERIES_BATCH_SIZE) — a stable ~20% margin under
+// the 100 hard limit, which absorbs an extra concurrent request without tripping it, while still
+// finishing within the report's lead time. This budget is MODULE-LEVEL on purpose — it is shared
+// across ALL concurrent report runs (the weekly and daily reports fire together and share the same
+// server-side window), so a per-call limiter wouldn't be enough. This does NOT drop any devices —
+// every device is still fetched; the requests are just paced over time.
+const RATE_LIMIT_MAX_DEVICES = 80;
 const RATE_LIMIT_WINDOW_MS = 30_000;
 const rateWindow: { at: number; devices: number }[] = [];
 
 /** Blocks until requesting `deviceCount` more devices stays within the 30s device-rate budget. */
 async function acquireDeviceRateBudget(deviceCount: number): Promise<void> {
-  // A single batch (≤20) never exceeds the cap (140), so this always eventually clears.
+  // A single batch (≤20) never exceeds the cap (80), so this always eventually clears.
   for (;;) {
     const now = Date.now();
     while (rateWindow.length > 0 && now - rateWindow[0].at >= RATE_LIMIT_WINDOW_MS) rateWindow.shift();
