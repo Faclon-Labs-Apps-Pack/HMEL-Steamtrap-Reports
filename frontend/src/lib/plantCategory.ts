@@ -34,9 +34,29 @@ export const CATEGORY_UNIT_ROSTER: Record<string, string[]> = {
   ],
 };
 
-/** Uppercase, alphanumerics only (runs of spaces/hyphens/slashes/parentheses → a single space) — so tag spellings and canonical names compare equal. */
-export function normalizeUnit(name: string): string {
+/** Uppercase, alphanumerics only (runs of spaces/hyphens/slashes/parentheses → a single space). */
+function normalizeUnitRaw(name: string): string {
   return name.toUpperCase().replace(/[^A-Z0-9]+/g, ' ').trim();
+}
+
+/**
+ * Live device department tags sometimes use a shorter/alternate spelling than the canonical roster
+ * name — confirmed with the client that these are the SAME unit. Map the normalized live spelling to
+ * the roster's normalized form so those devices land in the right Unit Name row AND plant category
+ * (otherwise they fall through to "Unassigned" and are dropped from the weekly report):
+ *   • tag "CDU"   → roster "CDU/VDU" (Refinery)   — the plain "CDU" wouldn't match "CDU VDU"
+ *   • tag "DHDT1" → roster "DHDT-1"  (Refinery)   — "DHDT1" wouldn't match "DHDT 1"
+ */
+const NORMALIZED_UNIT_ALIASES: Record<string, string> = {
+  [normalizeUnitRaw('CDU')]: normalizeUnitRaw('CDU/VDU'),
+  [normalizeUnitRaw('DHDT1')]: normalizeUnitRaw('DHDT-1'),
+};
+
+/** Normalize a unit/tag name (see normalizeUnitRaw) and fold known live-spelling aliases onto the
+ *  canonical roster name — so tag spellings and canonical names compare equal. */
+export function normalizeUnit(name: string): string {
+  const n = normalizeUnitRaw(name);
+  return NORMALIZED_UNIT_ALIASES[n] ?? n;
 }
 
 // Normalized unit-name -> plant category, built from the roster above (plus a few legacy
