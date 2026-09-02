@@ -283,8 +283,10 @@ export async function generateDailyReportWorkbooks(
     // Print setup (printing only), dynamic per sheet so the layouts can never cross over:
     //  - Summary: A4 portrait, whole sheet on exactly one page, no print header/footer at all.
     //  - Analysis & Live Status: A3 landscape, all columns on one page wide, repeating header row,
-    //    report-name title, report date, and "Page X of Y" footer.
-    const reportDate = formatReportDate(range.end);
+    //    report-name title, GENERATION date, and "Page X of Y" footer.
+    // The footer shows the generation date (when the report was made), not the data-window date —
+    // the reported day is already stated in the Summary's Period / "Status at" lines.
+    const reportDate = formatReportDate(generatedAt);
     const title = `Steam Trap Daily Report–${unitName.trim()}`;
     applySummaryPrintLayout(summarySheet);
     applyPrintLayout(analysisSheet, { reportDate, title, repeatHeaderRow: 1 });
