@@ -17,6 +17,7 @@ export interface DailyAnalysisRow {
   devName: string;
   location: string;
   department: string;
+  steamType: string;
   currentStatus: LastDataPoint['value'] | undefined;
   durationHours: number;
   statusPercentages: Record<StatusColumn, number>;
@@ -38,6 +39,7 @@ export interface DailyLiveStatusRow {
   devName: string;
   location: string;
   department: string;
+  steamType: string;
   inletPressure: string;
   outletPressure: string;
   baseLineInletTemperature: string;
@@ -76,6 +78,7 @@ export function buildDailyAnalysisRows(
       devName: device.devName,
       location: locationFor(device, properties),
       department: extractDepartmentFromTags(device.tags) ?? UNASSIGNED,
+      steamType: properties?.steamType || 'N/A',
       currentStatus: statusByDevID.get(device.devID),
       durationHours,
       statusPercentages: stats?.statusPercentages ?? emptyPercentages(),
@@ -112,6 +115,7 @@ export function buildDailyLiveStatusRows(
       devName: device.devName,
       location: locationFor(device, properties),
       department: extractDepartmentFromTags(device.tags) ?? UNASSIGNED,
+      steamType: properties?.steamType || 'N/A',
       inletPressure: properties?.inletPressure || 'N/A',
       outletPressure: properties?.outletPressure || 'N/A',
       baseLineInletTemperature: properties?.baseLineInletTemperature || 'N/A',

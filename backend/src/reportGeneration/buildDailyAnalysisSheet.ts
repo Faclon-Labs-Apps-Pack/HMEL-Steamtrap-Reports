@@ -42,6 +42,7 @@ const HEADERS = [
   'Tag No',
   'Device ID',
   'Location',
+  'Type of Steam',
   'Current Status',
   'Duration (hrs)',
   ...ANALYSIS_STATUS_GROUPS.map((g) => g.label),
@@ -77,6 +78,7 @@ export function buildDailyAnalysisSheet(sheet: Worksheet, rows: DailyAnalysisRow
       row.devName,
       row.devID,
       row.location,
+      row.steamType,
       displayStatus(status),
       Number(row.durationHours.toFixed(1)),
       ...ANALYSIS_STATUS_GROUPS.map((g) =>

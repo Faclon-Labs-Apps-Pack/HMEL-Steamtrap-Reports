@@ -13,6 +13,8 @@ export interface SteamTrapProperties {
   costOfSteam?: string | number;
   /** "Trap Location" property — a real per-device field, distinct from and more accurate than devName for a Location column. */
   trapLocation?: string;
+  /** "Type Of Steam" property, e.g. "HP" / "MP" / "LP" — the steam grade the trap is on. */
+  steamType?: string;
 }
 
 function findProp(properties: DeviceProperty[], name: string): string | number | undefined {
@@ -28,6 +30,7 @@ function toSteamTrapProperties(properties: DeviceProperty[]): SteamTrapPropertie
     leakRate: findProp(properties, 'Steam Leak') as string | undefined,
     costOfSteam: findProp(properties, 'costOfSteam'),
     trapLocation: findProp(properties, 'Trap Location') as string | undefined,
+    steamType: findProp(properties, 'Type Of Steam') as string | undefined,
   };
 }
 
