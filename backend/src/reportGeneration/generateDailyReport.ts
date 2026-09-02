@@ -9,11 +9,10 @@ import { getDevicePropertiesByDevice } from '../services/devicePropertiesApi';
 import { getSteamLossByDevice, getSteamSavingByDevice, getSteamConsumptionTotal } from '../services/steamConsumptionApi';
 import { buildDailyAnalysisRows, buildDailyLiveStatusRows } from '../lib/buildDailyReportRows';
 import {
-  getTodayRange,
+  getPreviousDayRange,
   getTrailing7DayRange,
   getMonthToDateRange,
   getFinancialYearToDateRange,
-  normalizeDateRange,
   toEpochMs,
   type DateRange,
 } from '../lib/dateRange';
@@ -113,7 +112,10 @@ export async function generateDailyReportWorkbooks(
   // scheduled at its own time — filter here so every downstream fetch is scoped to those units.
   const devices = filterDevicesByUnit(allDevices, opts);
 
-  const range = normalizeDateRange(getTodayRange());
+  // The Daily Report covers the previous FULLY-COMPLETED calendar day (00:00 -> 23:59:59), not the
+  // still-in-progress current day — so it always has a full 24h of data and never shows a future
+  // end time. (Filename still uses the generation date, like the weekly report.)
+  const range = getPreviousDayRange();
   const startMs = toEpochMs(range.start);
   const endMs = toEpochMs(range.end);
   const durationHours = (endMs - startMs) / (1000 * 60 * 60);

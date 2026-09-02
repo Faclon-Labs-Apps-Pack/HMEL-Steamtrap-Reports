@@ -73,6 +73,23 @@ export function getTodayRange(now: Date = new Date()): DateRange {
 }
 
 /**
+ * Yesterday 00:00:00.000 through yesterday 23:59:59.999 (local time) — the last FULLY-COMPLETED
+ * calendar day (midnight-to-midnight). The Daily Report reports on this completed day, not the
+ * still-in-progress current day, so it always covers a full 24h and never prints a future
+ * timestamp. Mirrors getLastWeekRange's "report the last finished period" philosophy.
+ */
+export function getPreviousDayRange(now: Date = new Date()): DateRange {
+  const start = new Date(now);
+  start.setDate(start.getDate() - 1);
+  start.setHours(0, 0, 0, 0);
+
+  const end = new Date(start);
+  end.setHours(23, 59, 59, 999);
+
+  return { start, end };
+}
+
+/**
  * Expands a range to full calendar-day boundaries: start -> 00:00:00.000 of its day,
  * end -> 23:59:59.999 of its day. Needed because the DatePicker's single-day presets
  * ("Today", "Yesterday") resolve to `start === end` at exactly midnight — a zero-width
