@@ -54,6 +54,12 @@ function locationFor(device: Device, properties: SteamTrapProperties | undefined
   return properties?.trapLocation || device.devName;
 }
 
+/** "Type Of Steam" metadata (HP/MP/LP/VHP…). Some devices store "." as a placeholder for "unset" — show N/A for those. */
+function steamTypeFor(properties: SteamTrapProperties | undefined): string {
+  const v = properties?.steamType?.trim();
+  return v && v !== '.' ? v : 'N/A';
+}
+
 export function buildDailyAnalysisRows(
   devices: Device[],
   lastDPs: LastDataPoint[],
@@ -78,7 +84,7 @@ export function buildDailyAnalysisRows(
       devName: device.devName,
       location: locationFor(device, properties),
       department: extractDepartmentFromTags(device.tags) ?? UNASSIGNED,
-      steamType: properties?.steamType || 'N/A',
+      steamType: steamTypeFor(properties),
       currentStatus: statusByDevID.get(device.devID),
       durationHours,
       statusPercentages: stats?.statusPercentages ?? emptyPercentages(),
@@ -115,7 +121,7 @@ export function buildDailyLiveStatusRows(
       devName: device.devName,
       location: locationFor(device, properties),
       department: extractDepartmentFromTags(device.tags) ?? UNASSIGNED,
-      steamType: properties?.steamType || 'N/A',
+      steamType: steamTypeFor(properties),
       inletPressure: properties?.inletPressure || 'N/A',
       outletPressure: properties?.outletPressure || 'N/A',
       baseLineInletTemperature: properties?.baseLineInletTemperature || 'N/A',
