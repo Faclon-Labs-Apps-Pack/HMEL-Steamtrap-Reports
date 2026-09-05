@@ -12,7 +12,13 @@ const STEAM_SAVING_SENSOR = 'D12';
 
 interface SteamConsumptionCustomResponse {
   success: boolean;
-  data?: { steamConsumption: number };
+  // The API returns the aggregate in `steamConsumptionTotal` (KG). `steamConsumption` used to be
+  // that same number but is now an object keyed by devID ({ "<devID>": <kg> }) — hence we read the
+  // Total (falling back to summing the per-device map, then the legacy number form).
+  data?: {
+    steamConsumption?: number | Record<string, number>;
+    steamConsumptionTotal?: number;
+  };
   errors?: string[];
 }
 
@@ -57,10 +63,21 @@ async function getSteamConsumptionCustom(
     throw new ApiError('Failed to fetch steam consumption from IOsense.');
   }
 
-  // The endpoint omits/nulls `steamConsumption` for a device with no loss/saving data in the
-  // window — `undefined / 1000` would be NaN and poison every cell/total it feeds, so default to 0.
-  const kg = body.data.steamConsumption;
-  return typeof kg === 'number' && Number.isFinite(kg) ? kg / 1000 : 0; // API returns KG; reports use MT
+  // Read the aggregate KG for the requested devices. Prefer `steamConsumptionTotal`; fall back to
+  // summing the per-device `steamConsumption` map (current format), then the legacy plain-number
+  // form. Missing/non-finite -> 0 so it never poisons a cell/total with NaN.
+  const d = body.data;
+  let kg: number;
+  if (typeof d.steamConsumptionTotal === 'number') {
+    kg = d.steamConsumptionTotal;
+  } else if (d.steamConsumption && typeof d.steamConsumption === 'object') {
+    kg = Object.values(d.steamConsumption).reduce((sum, v) => sum + (Number(v) || 0), 0);
+  } else if (typeof d.steamConsumption === 'number') {
+    kg = d.steamConsumption; // legacy response shape
+  } else {
+    kg = 0;
+  }
+  return Number.isFinite(kg) ? kg / 1000 : 0; // API returns KG; reports use MT
 }
 
 /**
