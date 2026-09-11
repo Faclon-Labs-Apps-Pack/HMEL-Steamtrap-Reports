@@ -11,7 +11,7 @@ import { classifyStatus } from '../lib/statusClassification';
 import {
   getLastWeekRange,
   getMonthToDateRange,
-  getFinancialYearToDateRange,
+  getTillDateRange,
   normalizeDateRange,
   toEpochMs,
   type DateRange,
@@ -126,7 +126,7 @@ export async function generateManagementReportWorkbooks(
   const endMs = toEpochMs(range.end);
   const wtdRange = range;
   const mtdRange = getMonthToDateRange(range.end);
-  const ytdRange = getFinancialYearToDateRange(range.end);
+  const ytdRange = getTillDateRange(range.end);
 
   report(`Loading current status for ${devices.length} devices…`);
   const lastDPs: LastDataPoint[] = await getLastDataPoints(devices.map((d) => ({ devID: d.devID, sensor: STATUS_SENSOR })));

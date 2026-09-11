@@ -12,7 +12,7 @@ import {
   getPreviousDayRange,
   getTrailing7DayRange,
   getMonthToDateRange,
-  getFinancialYearToDateRange,
+  getTillDateRange,
   toEpochMs,
   type DateRange,
 } from '../lib/dateRange';
@@ -102,7 +102,7 @@ export interface DailyUnitReport {
  */
 export async function generateDailyReportWorkbooks(
   onProgress?: (progress: DailyReportProgress) => void,
-  opts?: { unitKeys?: string[]; excludeUnitKeys?: string[]; fast?: boolean },
+  opts?: { unitKeys?: string[]; excludeUnitKeys?: string[]; fast?: boolean; range?: DateRange },
 ): Promise<DailyUnitReport[]> {
   const report = (label: string) => onProgress?.({ label });
 
@@ -114,8 +114,9 @@ export async function generateDailyReportWorkbooks(
 
   // The Daily Report covers the previous FULLY-COMPLETED calendar day (00:00 -> 23:59:59), not the
   // still-in-progress current day — so it always has a full 24h of data and never shows a future
-  // end time. (Filename still uses the generation date, like the weekly report.)
-  const range = getPreviousDayRange();
+  // end time. (Filename still uses the generation date, like the weekly report.) `opts.range`
+  // overrides this to target a specific historical day (used by the backfill script).
+  const range = opts?.range ?? getPreviousDayRange();
   const startMs = toEpochMs(range.start);
   const endMs = toEpochMs(range.end);
   const durationHours = (endMs - startMs) / (1000 * 60 * 60);
@@ -132,10 +133,13 @@ export async function generateDailyReportWorkbooks(
   const pt2ByDevID = new Map(tempReadings.filter((r) => r.sensor === OUTLET_TEMP_SENSOR).map((r) => [r.devID, r.value]));
 
   // WTD / MTD / YTD windows for the Summary sheet's Performance Indicators + Maintenance Log
-  // period columns (DTD = today, the report window itself).
-  const wtdRange = getTrailing7DayRange();
-  const mtdRange = getMonthToDateRange();
-  const ytdRange = getFinancialYearToDateRange();
+  // period columns (DTD = the report window itself). For a backfill (custom range) these are
+  // computed AS-OF that day's end, so a historical report's trailing/MTD/YTD are correct for the
+  // day it reports on; otherwise they're as-of now (live).
+  const asOf = opts?.range ? range.end : new Date();
+  const wtdRange = getTrailing7DayRange(asOf);
+  const mtdRange = getMonthToDateRange(asOf);
+  const ytdRange = getTillDateRange(asOf);
   const allDevIDs = devices.map((d) => d.devID);
 
   // Corrective actions: fetch the widest window (YTD) ONCE, then count per window client-side

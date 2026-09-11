@@ -12,7 +12,7 @@ import {
   getPreviousDayRange,
   getTrailing7DayRange,
   getMonthToDateRange,
-  getFinancialYearToDateRange,
+  getTillDateRange,
   toEpochMs,
   type DateRange,
 } from '../lib/dateRange';
@@ -135,7 +135,7 @@ export async function generateDailyReportWorkbooks(
   // period columns (DTD = today, the report window itself).
   const wtdRange = getTrailing7DayRange();
   const mtdRange = getMonthToDateRange();
-  const ytdRange = getFinancialYearToDateRange();
+  const ytdRange = getTillDateRange();
   const allDevIDs = devices.map((d) => d.devID);
 
   // Corrective actions: fetch the widest window (YTD) ONCE, then count per window client-side

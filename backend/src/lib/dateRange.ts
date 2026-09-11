@@ -56,13 +56,19 @@ export function getMonthToDateRange(now: Date = new Date()): DateRange {
 }
 
 /**
- * April 1st of the current Indian financial year through right now — the weekly Management
- * Report KPI table's "YTD (current FY)" window (the template header says FY explicitly, and
- * HMEL runs on the Indian April-March financial year).
+ * Fixed monitoring-start date. Steam-trap data begins 1-Sep-2026, so the cumulative "YTD / Till
+ * Date" window is anchored here rather than the Apr-Mar financial year (per client request) — there
+ * is no data before this date, and the cumulative keeps growing from 1-Sep-2026 onward.
  */
-export function getFinancialYearToDateRange(now: Date = new Date()): DateRange {
-  const fyStartYear = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
-  return { start: new Date(fyStartYear, 3, 1, 0, 0, 0, 0), end: now };
+export const MONITORING_START = new Date(2026, 8, 1, 0, 0, 0, 0); // 1-Sep-2026 00:00 (local = IST)
+
+/**
+ * Monitoring start (1-Sep-2026) through `now` — the cumulative "YTD / Till Date" window used by the
+ * Daily and Weekly Performance Indicators. (Formerly Apr-Mar financial-year-to-date; changed per
+ * client request since data only exists from 1-Sep-2026.)
+ */
+export function getTillDateRange(now: Date = new Date()): DateRange {
+  return { start: new Date(MONITORING_START), end: now };
 }
 
 /** Today, 00:00:00 through right now (local time) — used by the Daily Report, which is windowed to "today" per its name and the source template's own 24hr duration. */
