@@ -78,12 +78,13 @@ export function buildDailyAnalysisRows(
     const stats = timeSeriesStatsByDevID.get(device.devID);
 
     // When a device has NO S1 readings in the window, the time-series percentages are all zero, so
-    // every duration column would render 00:00:00 and the row wouldn't total the 24h window.
-    // Attribute the whole window to the device's CURRENT status instead (e.g. a trap that reported
-    // nothing all day shows its status — "No Status"/"Offline"/etc. — for the full duration).
+    // every duration column would render 00:00:00 and the row wouldn't total the 24h window. The
+    // report-day status is genuinely unknown (no data), so attribute the whole window to "No Status"
+    // — an honest "no reading", not a fabricated active status. (The live/current status is shown
+    // separately in the "Live Status (now)" column and the Live Status sheet.)
     let statusPercentages = stats?.statusPercentages ?? emptyPercentages();
     if (STATUS_COLUMNS.every((col) => statusPercentages[col] === 0)) {
-      statusPercentages = { ...emptyPercentages(), [classifyStatus(statusByDevID.get(device.devID))]: 100 };
+      statusPercentages = { ...emptyPercentages(), 'No Status': 100 };
     }
 
     return {

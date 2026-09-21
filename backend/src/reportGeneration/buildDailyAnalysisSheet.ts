@@ -43,7 +43,7 @@ const HEADERS = [
   'Type of Steam',
   'Device ID',
   'Location',
-  'Current Status',
+  'Live Status (now)',
   'Duration (hrs)',
   ...ANALYSIS_STATUS_GROUPS.map((g) => g.label),
   'Change in Status',
