@@ -77,6 +77,15 @@ export function buildDailyAnalysisRows(
     const properties = propertiesByDevID.get(device.devID);
     const stats = timeSeriesStatsByDevID.get(device.devID);
 
+    // When a device has NO S1 readings in the window, the time-series percentages are all zero, so
+    // every duration column would render 00:00:00 and the row wouldn't total the 24h window.
+    // Attribute the whole window to the device's CURRENT status instead (e.g. a trap that reported
+    // nothing all day shows its status — "No Status"/"Offline"/etc. — for the full duration).
+    let statusPercentages = stats?.statusPercentages ?? emptyPercentages();
+    if (STATUS_COLUMNS.every((col) => statusPercentages[col] === 0)) {
+      statusPercentages = { ...emptyPercentages(), [classifyStatus(statusByDevID.get(device.devID))]: 100 };
+    }
+
     return {
       id: device.devID,
       srNo: index + 1,
@@ -87,7 +96,7 @@ export function buildDailyAnalysisRows(
       steamType: steamTypeFor(properties),
       currentStatus: statusByDevID.get(device.devID),
       durationHours,
-      statusPercentages: stats?.statusPercentages ?? emptyPercentages(),
+      statusPercentages,
       statusChangeCount: stats?.statusChangeCount ?? 0,
       correctiveActionCount: correctiveActionCountByDevID.get(device.devID) ?? 0,
       feedbackCount: feedbackCountByDevID.get(device.devID) ?? 0,
