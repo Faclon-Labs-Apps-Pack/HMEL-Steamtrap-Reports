@@ -21,29 +21,54 @@ interface FeedbackFilterResponse {
   errors?: string[];
 }
 
-/** All feedback-record `createdAt` timestamps (epoch ms) for one device, so callers can count per time-window client-side. */
+const FEEDBACK_TIMEOUT_MS = 30_000; // abort a hung request instead of waiting on the default header timeout
+const FEEDBACK_MAX_ATTEMPTS = 3; // retry transient network/timeout errors before giving up on a device
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/** One feedback request for a device, with an explicit abort timeout. */
+async function fetchFeedbackDatesOnce(devID: string): Promise<number[]> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FEEDBACK_TIMEOUT_MS);
+  try {
+    const response = await fetch(`${TRAP_REPLACEMENT_API_BASE}/account/trapReplacement/filter/1/200`, {
+      method: 'PUT',
+      headers: {
+        Authorization: getStoredToken(),
+        'Content-Type': 'application/json',
+        'ngsw-bypass': 'true',
+      },
+      body: JSON.stringify({ isFeedback: true, search: {}, devID }),
+      signal: controller.signal,
+    });
+
+    const body: FeedbackFilterResponse = await response.json();
+
+    if (!body.success) {
+      if (body.errors?.some((e) => /no feedback found/i.test(e))) return [];
+      throw new ApiError(`Failed to fetch feedback for ${devID}: ${body.errors?.join(', ') ?? 'unknown error'}`);
+    }
+    if (!response.ok || !body.data) {
+      throw new ApiError(`Failed to fetch feedback for ${devID}.`);
+    }
+
+    return body.data.data.map((r) => new Date(r.createdAt).getTime()).filter((t) => Number.isFinite(t));
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** All feedback-record `createdAt` timestamps (epoch ms) for one device — retried on transient failures. */
 async function getFeedbackDates(devID: string): Promise<number[]> {
-  const response = await fetch(`${TRAP_REPLACEMENT_API_BASE}/account/trapReplacement/filter/1/200`, {
-    method: 'PUT',
-    headers: {
-      Authorization: getStoredToken(),
-      'Content-Type': 'application/json',
-      'ngsw-bypass': 'true',
-    },
-    body: JSON.stringify({ isFeedback: true, search: {}, devID }),
-  });
-
-  const body: FeedbackFilterResponse = await response.json();
-
-  if (!body.success) {
-    if (body.errors?.some((e) => /no feedback found/i.test(e))) return [];
-    throw new ApiError(`Failed to fetch feedback for ${devID}: ${body.errors?.join(', ') ?? 'unknown error'}`);
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= FEEDBACK_MAX_ATTEMPTS; attempt++) {
+    try {
+      return await fetchFeedbackDatesOnce(devID);
+    } catch (err) {
+      lastErr = err;
+      if (attempt < FEEDBACK_MAX_ATTEMPTS) await sleep(1000 * attempt);
+    }
   }
-  if (!response.ok || !body.data) {
-    throw new ApiError(`Failed to fetch feedback for ${devID}.`);
-  }
-
-  return body.data.data.map((r) => new Date(r.createdAt).getTime()).filter((t) => Number.isFinite(t));
+  throw lastErr;
 }
 
 /**
@@ -55,8 +80,14 @@ async function getFeedbackDates(devID: string): Promise<number[]> {
  */
 export async function getFeedbackDatesByDevice(devices: Device[]): Promise<Map<string, number[]>> {
   const results = await runWithConcurrencyLimit(devices, 10, async (device) => {
-    const dates = await getFeedbackDates(device.devID);
-    return [device.devID, dates] as const;
+    try {
+      return [device.devID, await getFeedbackDates(device.devID)] as const;
+    } catch (err) {
+      // Feedback count is a minor column — never let a transient feedback-endpoint failure abort
+      // the whole report. Degrade this device's count to 0 and carry on.
+      console.warn(`[feedback] ${device.devID}: giving up after ${FEEDBACK_MAX_ATTEMPTS} attempts, defaulting to 0 — ${(err as Error).message}`);
+      return [device.devID, [] as number[]] as const;
+    }
   });
 
   return new Map(results);
