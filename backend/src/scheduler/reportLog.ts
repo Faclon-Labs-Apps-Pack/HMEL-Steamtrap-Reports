@@ -8,11 +8,12 @@ import { LOG_DIR, REPORT_TIMEZONE } from '../config';
  *  - failed            → send attempt errored (reason captured)
  *  - skipped           → report generated but not emailed (e.g. no recipients configured)
  *  - generation-failed → the report couldn't even be built (data fetch / API error)
+ *  - generated         → an on-demand custom-range report built from the admin UI (not emailed)
  */
-export type ReportLogStatus = 'sent' | 'failed' | 'skipped' | 'generation-failed';
+export type ReportLogStatus = 'sent' | 'failed' | 'skipped' | 'generation-failed' | 'generated';
 
 export interface ReportLogEntry {
-  reportType: 'weekly' | 'daily';
+  reportType: 'weekly' | 'daily' | 'generated';
   /** The unit (daily) or plant category (weekly); '(generation)' for a whole-batch build failure. */
   section: string;
   status: ReportLogStatus;
@@ -20,6 +21,9 @@ export interface ReportLogEntry {
   recipients?: string[];
   /** Failure reason, for failed / generation-failed. */
   error?: string;
+  /** For on-demand `generated` reports: the custom time range (ISO), shown in the View Reports modal. */
+  rangeStart?: string;
+  rangeEnd?: string;
 }
 
 const LOG_TXT = path.join(LOG_DIR, 'report-log.txt');
@@ -50,7 +54,8 @@ function timestamp(): string {
 export async function logReport(entry: ReportLogEntry): Promise<void> {
   const ts = timestamp();
   const line =
-    `[${ts}] ${entry.status.toUpperCase().padEnd(16)} ${entry.reportType.padEnd(6)} | ${entry.section} | ${entry.fileName ?? '-'}` +
+    `[${ts}] ${entry.status.toUpperCase().padEnd(16)} ${entry.reportType.padEnd(9)} | ${entry.section} | ${entry.fileName ?? '-'}` +
+    (entry.rangeStart && entry.rangeEnd ? ` | range: ${entry.rangeStart} → ${entry.rangeEnd}` : '') +
     (entry.recipients && entry.recipients.length > 0 ? ` | to: ${entry.recipients.join(', ')}` : '') +
     (entry.error ? ` | reason: ${entry.error}` : '');
 

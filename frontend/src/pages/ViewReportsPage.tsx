@@ -18,7 +18,7 @@ import { Button } from '@faclon-labs/design-sdk/Button';
 import { Modal, ModalHeader, ModalBody, ModalFooter } from '@faclon-labs/design-sdk/Modal';
 import { SelectInput } from '@faclon-labs/design-sdk/SelectInput';
 import { DropdownMenu, ActionListItem } from '@faclon-labs/design-sdk/DropdownMenu';
-import { fetchReportLog, archiveDownloadUrl, type ReportLogEntry } from '../services/adminApi';
+import { fetchReportLog, downloadUrlForEntry, type ReportLogEntry } from '../services/adminApi';
 
 interface FilterOption {
   id: string;
@@ -26,7 +26,7 @@ interface FilterOption {
 }
 
 /** The design-sdk SelectInput idiom used across this app: controlled open state + DropdownMenu. */
-function FilterSelect({
+export function FilterSelect({
   label,
   options,
   value,
@@ -66,6 +66,7 @@ type StatusBadgeColor = 'Positive' | 'Negative' | 'Notice' | 'Neutral';
 
 const STATUS_COLOR: Record<string, StatusBadgeColor> = {
   sent: 'Positive',
+  generated: 'Positive',
   failed: 'Negative',
   'generation-failed': 'Negative',
   skipped: 'Notice',
@@ -93,11 +94,13 @@ const TYPE_OPTIONS = [
   { id: '', label: 'All types' },
   { id: 'daily', label: 'Daily' },
   { id: 'weekly', label: 'Weekly' },
+  { id: 'generated', label: 'Generated (on-demand)' },
 ];
 
 const STATUS_OPTIONS = [
   { id: '', label: 'All statuses' },
   { id: 'sent', label: 'Sent' },
+  { id: 'generated', label: 'Generated' },
   { id: 'failed', label: 'Failed' },
   { id: 'skipped', label: 'Skipped' },
   { id: 'generation-failed', label: 'Generation failed' },
@@ -138,6 +141,9 @@ function ReportDetailModal({ row, onClose }: { row: LogRow; onClose: () => void 
             <DetailField label="Type" value={row.reportType} />
             <DetailField label="Time (IST)" value={formatTime(row.time)} />
           </div>
+          {row.rangeStart && row.rangeEnd && (
+            <DetailField label="Report range (IST)" value={`${formatTime(row.rangeStart)}  →  ${formatTime(row.rangeEnd)}`} />
+          )}
           <div>
             <FieldLabel>Status</FieldLabel>
             <Badge size="Small" color={STATUS_COLOR[row.status] ?? 'Neutral'} label={row.status} />
@@ -172,7 +178,11 @@ function ReportDetailModal({ row, onClose }: { row: LogRow; onClose: () => void 
   );
 }
 
-export function ViewReportsPage() {
+/**
+ * The report send-log table (filters + table + details modal). Reusable: pass a `reloadToken` that
+ * changes (e.g. after an on-demand generation) to make it re-fetch and surface the new rows.
+ */
+export function ReportLogTable({ reloadToken }: { reloadToken?: number }) {
   const [rows, setRows] = useState<LogRow[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -198,7 +208,8 @@ export function ViewReportsPage() {
 
   useEffect(() => {
     void load();
-  }, [load]);
+    // reloadToken bumps after an on-demand generation so the fresh rows appear.
+  }, [load, reloadToken]);
 
   return (
     <div className="global-p-06">
@@ -283,7 +294,7 @@ export function ViewReportsPage() {
                       </TableCell>
                       <TableCell contentType="text">
                         {row.downloadable && row.fileName ? (
-                          <a href={archiveDownloadUrl(row.fileName)} download className="BodySmallRegular">
+                          <a href={downloadUrlForEntry(row)} download className="BodySmallRegular">
                             Download
                           </a>
                         ) : (

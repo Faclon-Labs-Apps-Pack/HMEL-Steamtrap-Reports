@@ -1,17 +1,15 @@
 import { useState } from 'react';
 import { Tabs, TabItem } from '@faclon-labs/design-sdk/Tabs';
-import { GenerateReportPage } from './pages/GenerateReportPage';
+import { GenerateViewPage } from './pages/GenerateViewPage';
 import { ScheduleReportPage } from './pages/ScheduleReportPage';
-import { ViewReportsPage } from './pages/ViewReportsPage';
 
-// The report-admin app: only the three operations tabs. The old in-browser viewer pages
-// (Steam Trap Status, Device Detail, Corrective Action Log, Weekly/Daily Report) still exist
-// under src/pages/ and can be re-added here if ever needed — per client request (2026-09-30)
-// they are not shown.
-type Tab = 'generate' | 'schedule' | 'view-reports';
+// The report-admin app: the "Generate & View" tab (on-demand generation + the send log, merged per
+// client request 2026-09-30) and "Schedule Report". The old in-browser viewer pages still exist
+// under src/pages/ and can be re-added if ever needed.
+type Tab = 'generate-view' | 'schedule';
 
 function App() {
-  const [tab, setTab] = useState<Tab>('generate');
+  const [tab, setTab] = useState<Tab>('generate-view');
 
   return (
     <div>
@@ -23,17 +21,15 @@ function App() {
           </p>
         </header>
         <Tabs value={tab} onChange={(value) => setTab(value as Tab)}>
-          <TabItem value="generate" label="Generate Report" />
+          <TabItem value="generate-view" label="Generate &amp; View" />
           <TabItem value="schedule" label="Schedule Report" />
-          <TabItem value="view-reports" label="View Reports" />
         </Tabs>
       </div>
 
       {/* key={tab} remounts on switch so the .ui-page entrance plays each time. */}
       <div className="ui-page" key={tab}>
-        {tab === 'generate' && <GenerateReportPage />}
+        {tab === 'generate-view' && <GenerateViewPage />}
         {tab === 'schedule' && <ScheduleReportPage />}
-        {tab === 'view-reports' && <ViewReportsPage />}
       </div>
     </div>
   );

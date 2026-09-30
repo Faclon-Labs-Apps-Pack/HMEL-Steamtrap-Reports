@@ -28,9 +28,10 @@ function formatIST(iso: string): string {
   return `${p.day}-${p.month}-${p.year} ${p.hour}:${p.minute}:${p.second} IST`;
 }
 
-// Row tint by outcome: sent = green, failed/generation-failed = red, skipped = amber.
+// Row tint by outcome: sent/generated = green, failed/generation-failed = red, skipped = amber.
 const STATUS_FILL: Record<ReportLogStatus, string> = {
   sent: 'FFE2EFDA',
+  generated: 'FFE2EFDA',
   failed: 'FFF8CBAD',
   'generation-failed': 'FFF8CBAD',
   skipped: 'FFFFF2CC',

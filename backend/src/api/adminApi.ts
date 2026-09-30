@@ -22,6 +22,8 @@ import {
 } from '../scheduler/overrides';
 import { generateRangeAnalysisWorkbooks } from '../reportGeneration/generateRangeAnalysisReport';
 import { saveWorkbook } from '../reportGeneration/saveWorkbook';
+import { derivePlantCategory } from '../lib/plantCategory';
+import { logReport } from '../scheduler/reportLog';
 
 /**
  * The admin UI's REST API (report send-log, schedule/recipient management via the overrides file,
@@ -37,12 +39,14 @@ import { saveWorkbook } from '../reportGeneration/saveWorkbook';
 
 interface LogEntry {
   time: string;
-  reportType: 'weekly' | 'daily';
+  reportType: 'weekly' | 'daily' | 'generated';
   section: string;
   status: string;
   fileName?: string;
   recipients?: string[];
   error?: string;
+  rangeStart?: string;
+  rangeEnd?: string;
 }
 
 async function readReportLog(): Promise<LogEntry[]> {
@@ -193,6 +197,16 @@ function startGenerateJob(unitKeys: string[], start: Date, end: Date): GenerateJ
         job.progressLabel = `Saving ${r.fileName}…`;
         await saveWorkbook(r.workbook, GENERATED_DIR, r.fileName);
         job.files.push({ fileName: r.fileName, unitName: r.unitName });
+        // Record every on-demand report in the shared send-log so it shows up in View Reports
+        // (with a Download that points at GENERATED_DIR). Never emailed, so no recipients.
+        await logReport({
+          reportType: 'generated',
+          section: r.unitName,
+          status: 'generated',
+          fileName: r.fileName,
+          rangeStart: start.toISOString(),
+          rangeEnd: end.toISOString(),
+        });
       }
       job.status = 'done';
       job.progressLabel = `Done — ${job.files.length} file(s).`;
@@ -200,6 +214,14 @@ function startGenerateJob(unitKeys: string[], start: Date, end: Date): GenerateJ
       job.status = 'failed';
       job.error = err instanceof Error ? err.message : String(err);
       job.progressLabel = 'Failed.';
+      await logReport({
+        reportType: 'generated',
+        section: unitKeys.length > 0 ? unitKeys.join(', ') : '(all units)',
+        status: 'generation-failed',
+        rangeStart: start.toISOString(),
+        rangeEnd: end.toISOString(),
+        error: job.error,
+      });
     } finally {
       job.finishedAt = new Date().toISOString();
       if (runningJobId === job.id) runningJobId = null;
@@ -255,16 +277,27 @@ export function createAdminApiRouter(): Router {
       const total = entries.length;
       entries = entries.slice(0, limit);
 
-      // Flag which files still exist in the archive (downloadable) — one readdir, not N stats.
+      // Flag which files still exist on disk (downloadable) — one readdir per dir, not N stats.
+      // Emailed reports live in ARCHIVE_DIR; on-demand `generated` reports live in GENERATED_DIR.
       let archived = new Set<string>();
+      let generated = new Set<string>();
       try {
         archived = new Set(await readdir(ARCHIVE_DIR));
       } catch {
-        // no archive dir yet — nothing is downloadable
+        // no archive dir yet
       }
+      try {
+        generated = new Set(await readdir(GENERATED_DIR));
+      } catch {
+        // no generated dir yet
+      }
+      const isGenerated = (e: LogEntry) => e.reportType === 'generated' || e.status === 'generated';
       res.json({
         total,
-        entries: entries.map((e) => ({ ...e, downloadable: !!e.fileName && archived.has(e.fileName) })),
+        entries: entries.map((e) => ({
+          ...e,
+          downloadable: !!e.fileName && (isGenerated(e) ? generated.has(e.fileName) : archived.has(e.fileName)),
+        })),
       });
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
@@ -278,7 +311,12 @@ export function createAdminApiRouter(): Router {
     try {
       const names = await displayNamesByKey();
       res.json({
-        sections: dailyUnitKeysFromEnv().map((key) => ({ key, name: names.get(key) ?? key })),
+        // `category` is the parent plant (Refinery / Petchem) — drives the cascading parent→child
+        // section picker in the Generate modal.
+        sections: dailyUnitKeysFromEnv().map((key) => {
+          const name = names.get(key) ?? key;
+          return { key, name, category: derivePlantCategory(name) };
+        }),
       });
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : String(err) });

@@ -6,19 +6,24 @@
 
 export interface ReportLogEntry {
   time: string;
-  reportType: 'weekly' | 'daily';
+  reportType: 'weekly' | 'daily' | 'generated';
   section: string;
-  status: 'sent' | 'failed' | 'skipped' | 'generation-failed';
+  status: 'sent' | 'failed' | 'skipped' | 'generation-failed' | 'generated';
   fileName?: string;
   recipients?: string[];
   error?: string;
-  /** True when an archived copy exists and /api/archive/:fileName will work. */
+  /** For on-demand `generated` reports: the custom range (ISO) the report covers. */
+  rangeStart?: string;
+  rangeEnd?: string;
+  /** True when the file still exists on disk and its download URL will work. */
   downloadable: boolean;
 }
 
 export interface Section {
   key: string;
   name: string;
+  /** Parent plant category — 'Refinery' | 'Petchem' | 'Unassigned'. Drives the cascading picker. */
+  category: string;
 }
 
 export interface Schedule {
@@ -89,6 +94,12 @@ export function archiveDownloadUrl(fileName: string): string {
 
 export function generatedDownloadUrl(fileName: string): string {
   return `/api/generated/${encodeURIComponent(fileName)}`;
+}
+
+/** Correct download URL for a log row: on-demand reports come from /generated, emailed ones from /archive. */
+export function downloadUrlForEntry(entry: ReportLogEntry): string {
+  const isGenerated = entry.reportType === 'generated' || entry.status === 'generated';
+  return isGenerated ? generatedDownloadUrl(entry.fileName!) : archiveDownloadUrl(entry.fileName!);
 }
 
 export function fetchSections(): Promise<{ sections: Section[] }> {
