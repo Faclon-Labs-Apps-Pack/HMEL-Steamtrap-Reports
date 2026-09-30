@@ -1,0 +1,122 @@
+/*
+ * ui-polish.css — subtle, professional motion + interaction polish for the report-admin UI.
+ *
+ * Goal (client request 2026-09-30): make the UI friendlier with MINIMAL animation — gentle eases
+ * and transitions only, nothing flashy. Design-sdk components keep their own built-in states; this
+ * file only adds affordances to the hand-built controls (inputs, section cards, links) and a soft
+ * entrance for panels/pages. All tokens have plain fallbacks, and every animation is disabled under
+ * prefers-reduced-motion.
+ */
+
+:root {
+  --ui-ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --ui-dur: 180ms;
+  --ui-dur-slow: 220ms;
+  --ui-ring: var(--surface-brand-lightest, rgba(59, 110, 245, 0.16));
+  --ui-accent: var(--border-brand-default, #3b6ef5);
+}
+
+/* ---- Form controls: smooth hover/focus feedback ---- */
+input[type='text'],
+input[type='datetime-local'],
+input[type='date'],
+input[type='time'],
+input[type='search'],
+textarea {
+  transition: border-color var(--ui-dur) var(--ui-ease), box-shadow var(--ui-dur) var(--ui-ease),
+    background-color var(--ui-dur) var(--ui-ease);
+}
+input[type='text']:hover,
+input[type='datetime-local']:hover,
+input[type='date']:hover,
+input[type='time']:hover,
+textarea:hover {
+  border-color: var(--ui-accent);
+}
+input[type='text']:focus,
+input[type='datetime-local']:focus,
+input[type='date']:focus,
+input[type='time']:focus,
+input[type='search']:focus,
+textarea:focus {
+  outline: none;
+  border-color: var(--ui-accent);
+  box-shadow: 0 0 0 3px var(--ui-ring);
+}
+
+/* ---- Checkboxes: brand accent + tiny press feedback ---- */
+input[type='checkbox'] {
+  cursor: pointer;
+  accent-color: var(--surface-brand-default, #3b6ef5);
+  transition: transform var(--ui-dur) var(--ui-ease);
+}
+input[type='checkbox']:active {
+  transform: scale(0.88);
+}
+
+/* ---- Links: gentle fade on hover ---- */
+a {
+  transition: color var(--ui-dur) var(--ui-ease), opacity var(--ui-dur) var(--ui-ease);
+}
+a:hover {
+  opacity: 0.8;
+}
+
+/* ---- Selectable "section" cards (Generate tab): lift + highlight on hover ---- */
+.ui-select-card {
+  transition: border-color var(--ui-dur) var(--ui-ease), background-color var(--ui-dur) var(--ui-ease),
+    box-shadow var(--ui-dur) var(--ui-ease), transform var(--ui-dur) var(--ui-ease);
+}
+.ui-select-card:hover {
+  border-color: var(--ui-accent);
+  box-shadow: 0 2px 10px rgba(16, 24, 40, 0.08);
+  transform: translateY(-1px);
+}
+.ui-select-card:active {
+  transform: translateY(0);
+}
+
+/* ---- Soft entrance for panels that appear (results, editors, previews) ---- */
+@keyframes ui-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.ui-fade-in {
+  animation: ui-fade-in var(--ui-dur-slow) var(--ui-ease) both;
+}
+
+/* ---- Tab page swap: a barely-there cross-fade so switching tabs feels smooth ---- */
+.ui-page {
+  animation: ui-fade-in var(--ui-dur-slow) var(--ui-ease) both;
+}
+
+/* ---- App header ---- */
+.ui-app-header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: var(--spacing-04, 12px);
+}
+.ui-app-header .ui-app-title {
+  margin: 0;
+}
+.ui-app-header .ui-app-subtitle {
+  margin: 0;
+  color: var(--text-neutral-secondary, #667085);
+}
+
+/* ---- Respect users who prefer no motion ---- */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  .ui-page,
+  .ui-fade-in {
+    animation: none !important;
+    transition: none !important;
+  }
+}

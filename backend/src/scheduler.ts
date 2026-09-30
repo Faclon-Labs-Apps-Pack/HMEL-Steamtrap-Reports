@@ -10,7 +10,9 @@ import {
   getWeeklyDefaultCron,
   getReportBaseUrl,
   OUTPUT_DIR,
+  ARCHIVE_DIR,
 } from './config';
+import { loadOverrides, isPaused, overrideRecipients } from './scheduler/overrides';
 import { startFileServer } from './fileServer';
 import { scheduleReport, longSetTimeout } from './scheduler/scheduleReport';
 import { addPendingEmail, removePendingEmail, getPendingEmails, type PendingEmail } from './scheduler/pendingEmails';
@@ -29,6 +31,17 @@ import { generateDailyReportWorkbooks } from './reportGeneration/generateDailyRe
  * <CATEGORY>_WEEKLY_DAY/TIME can be scheduled independently. The subject is the report/file name.
  */
 async function generateWeekly(occurrence: Date, opts?: { categories?: string[] }): Promise<PendingEmail[]> {
+  // PAUSE: ALL short-circuits BEFORE the expensive generation (per-section pauses are checked
+  // per workbook below). Re-checked again after generation in case the file changed mid-run.
+  if ((await loadOverrides()).pauseAll) {
+    await logReport({
+      reportType: 'weekly',
+      section: opts?.categories?.join(', ') ?? '(all categories)',
+      status: 'skipped',
+      error: 'Paused via report-overrides.txt (PAUSE: ALL — resume from the admin UI)',
+    });
+    return [];
+  }
   let reports;
   try {
     reports = await generateManagementReportWorkbooks((p) => console.log(`[weekly] ${p.label}`), opts);
@@ -42,11 +55,30 @@ async function generateWeekly(occurrence: Date, opts?: { categories?: string[] }
     throw err;
   }
 
+  // Runtime overrides (pause / recipient replacements) — re-read fresh at fire time, fail-open:
+  // any problem loading them means plain .env behavior, never a stopped report.
+  const overrides = await loadOverrides();
+
   const pendings: PendingEmail[] = [];
   for (const { categoryName, reportName, fileName, workbook } of reports) {
+    if (isPaused(overrides, categoryName)) {
+      await logReport({
+        reportType: 'weekly',
+        section: categoryName,
+        status: 'skipped',
+        fileName,
+        error: 'Paused via report-overrides.txt (resume from the admin UI)',
+      });
+      continue;
+    }
     await saveWorkbook(workbook, OUTPUT_DIR, fileName);
+    // Keep a permanent copy for the admin UI's View Reports tab (OUTPUT_DIR files are one-shot:
+    // deleted when IOsense fetches them). An archive failure must never block the send.
+    await saveWorkbook(workbook, ARCHIVE_DIR, fileName).catch((err) =>
+      console.error(`[archive] Could not archive ${fileName} (send continues):`, err),
+    );
 
-    const recipients = getWeeklyRecipientsForCategory(categoryName);
+    const recipients = overrideRecipients(overrides, categoryName, 'weekly') ?? getWeeklyRecipientsForCategory(categoryName);
     if (recipients.length === 0) {
       await logReport({
         reportType: 'weekly',
@@ -94,6 +126,16 @@ async function generateDaily(
   occurrence: Date,
   opts?: { unitKeys?: string[]; excludeUnitKeys?: string[] },
 ): Promise<PendingEmail[]> {
+  // PAUSE: ALL short-circuits BEFORE the expensive generation — see generateWeekly.
+  if ((await loadOverrides()).pauseAll) {
+    await logReport({
+      reportType: 'daily',
+      section: opts?.unitKeys?.join(', ') ?? '(all units)',
+      status: 'skipped',
+      error: 'Paused via report-overrides.txt (PAUSE: ALL — resume from the admin UI)',
+    });
+    return [];
+  }
   let reports;
   try {
     reports = await generateDailyReportWorkbooks((p) => console.log(`[daily] ${p.label}`), opts);
@@ -107,11 +149,27 @@ async function generateDaily(
     throw err;
   }
 
+  // Runtime overrides — same fail-open, fire-time semantics as the weekly path above.
+  const overrides = await loadOverrides();
+
   const pendings: PendingEmail[] = [];
   for (const { unitName, reportName, fileName, workbook } of reports) {
+    if (isPaused(overrides, unitName)) {
+      await logReport({
+        reportType: 'daily',
+        section: unitName,
+        status: 'skipped',
+        fileName,
+        error: 'Paused via report-overrides.txt (resume from the admin UI)',
+      });
+      continue;
+    }
     await saveWorkbook(workbook, OUTPUT_DIR, fileName);
+    await saveWorkbook(workbook, ARCHIVE_DIR, fileName).catch((err) =>
+      console.error(`[archive] Could not archive ${fileName} (send continues):`, err),
+    );
 
-    const recipients = getDailyRecipientsForUnit(unitName);
+    const recipients = overrideRecipients(overrides, unitName, 'daily') ?? getDailyRecipientsForUnit(unitName);
     if (recipients.length === 0) {
       await logReport({
         reportType: 'daily',

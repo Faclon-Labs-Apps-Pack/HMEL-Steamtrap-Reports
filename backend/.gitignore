@@ -1,2 +1,7 @@
 output/*.xlsx
 output/pending-emails.json
+
+# Runtime report output (never commit — may contain report data)
+archive/
+generated/
+output/

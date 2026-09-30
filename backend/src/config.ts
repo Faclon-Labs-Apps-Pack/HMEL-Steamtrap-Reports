@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import path from 'node:path';
 
 function requireEnv(name: string): string {
   const value = process.env[name];
@@ -8,15 +9,41 @@ function requireEnv(name: string): string {
   return value;
 }
 
-/** Personal Access Token, issued by an IOsense admin for service/automation use — no expiry, unlike the browser JWT. */
+/**
+ * Strips what a copy-paste into .env (or the platform's env UI) tends to leave behind: surrounding
+ * quotes and leading/trailing whitespace. dotenv removes a matching pair of quotes but keeps any
+ * whitespace INSIDE them, so `IOSENSE_PAT="  Bearer eyJ…"` yields a value starting with two spaces.
+ */
+function cleanEnvValue(raw: string): string {
+  let v = raw.trim();
+  if (v.length >= 2 && (v[0] === '"' || v[0] === "'") && v[v.length - 1] === v[0]) {
+    v = v.slice(1, -1);
+  }
+  return v.trim();
+}
+
+/**
+ * Personal Access Token, issued by an IOsense admin for service/automation use — no expiry, unlike
+ * the browser JWT.
+ *
+ * The token is cleaned and any existing "Bearer " prefix (however many, however spaced) collapsed to
+ * exactly one. Without this, a value like `"  Bearer eyJ…"` failed the plain `startsWith('Bearer ')`
+ * check and got a SECOND prefix — `Authorization: Bearer   Bearer eyJ…` — which IOsense rejects with
+ * 401 "Invalid Authorization Bearer!". Devices are the first call every report makes, so that one
+ * stray space silently killed all scheduled reports for four days (26-29 Sep 2026).
+ */
 export function getAuthHeader(): string {
-  const pat = requireEnv('IOSENSE_PAT');
-  return pat.startsWith('Bearer ') ? pat : `Bearer ${pat}`;
+  const pat = cleanEnvValue(requireEnv('IOSENSE_PAT'));
+  const token = pat.replace(/^(?:Bearer\s+)+/i, '').trim();
+  if (!token) {
+    throw new Error('IOSENSE_PAT contains no token after stripping quotes/whitespace/"Bearer" prefix.');
+  }
+  return `Bearer ${token}`;
 }
 
 /** Organisation ID the PAT acts on behalf of — required for service auth (unlike the browser JWT flow, which doesn't need it). */
 export function getOrgId(): string {
-  return requireEnv('IOSENSE_ORG_ID');
+  return cleanEnvValue(requireEnv('IOSENSE_ORG_ID'));
 }
 
 // The schedule values you put in .env (WEEKLY_REPORT_TIME / DAILY_REPORT_TIME etc.) are meant as IST wall-clock
@@ -221,3 +248,22 @@ export function getReportBaseUrl(): string {
 // scripts set (pm2, systemd unit files, etc.) — honored as a fallback so you don't have to
 // duplicate the same value under two different names on your VM.
 export const FILE_SERVER_PORT = Number(process.env.FILE_SERVER_PORT ?? process.env.PORT ?? '3000');
+
+// Where a copy of every scheduled report is kept AFTER sending, so the "View Reports" admin tab
+// can offer a working download for past sends. Unlike OUTPUT_DIR (whose files are one-shot:
+// deleted the moment IOsense fetches them for the email), files here are never auto-deleted.
+export const ARCHIVE_DIR = process.env.REPORT_ARCHIVE_DIR ?? new URL('../archive', import.meta.url).pathname;
+
+// Where on-demand (custom-range) reports generated from the admin UI's "Generate Report" tab are
+// written. Served read-only via GET /api/generated/:fileName — downloading does NOT delete.
+export const GENERATED_DIR = process.env.REPORT_GENERATED_DIR ?? new URL('../generated', import.meta.url).pathname;
+
+// The runtime overrides file (pause sections / replace recipient lists) consulted by the
+// scheduler AT FIRE TIME — see scheduler/overrides.ts. Lives in LOG_DIR by default because that
+// directory is the one location proven to survive platform redeploys (the send-log history does).
+export const OVERRIDES_FILE = process.env.REPORT_OVERRIDES_FILE ?? path.join(LOG_DIR, 'report-overrides.txt');
+
+// Port for the STANDALONE admin/test server (src/adminServer.ts) — the admin API + frontend
+// WITHOUT the scheduler (it never generates on a timer and never sends email). The production
+// entry point (src/scheduler.ts) instead serves the same admin API on FILE_SERVER_PORT.
+export const ADMIN_PORT = Number(process.env.ADMIN_PORT ?? '5010');

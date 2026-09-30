@@ -4,6 +4,7 @@ import path from 'node:path';
 import { existsSync } from 'node:fs';
 import { stat, unlink } from 'node:fs/promises';
 import { OUTPUT_DIR, FILE_SERVER_PORT, FRONTEND_DIST_DIR } from './config';
+import { createAdminApiRouter } from './api/adminApi';
 
 const MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
@@ -79,10 +80,14 @@ export function startFileServer(): ReturnType<express.Express['listen']> {
     });
   });
 
+  // The admin UI's REST API (report log, schedule/recipient overrides, on-demand generation) —
+  // same router the standalone adminServer.ts uses. Additive: /report/* and the SPA are untouched.
+  app.use('/api', createAdminApiRouter());
+
   if (existsSync(FRONTEND_DIST_DIR)) {
     app.use(express.static(FRONTEND_DIST_DIR));
     // SPA fallback: any other GET (a client-side route, a browser refresh, etc.) gets index.html.
-    app.get(/^(?!\/report\/).*/, (_req, res) => {
+    app.get(/^(?!\/report\/|\/api\/).*/, (_req, res) => {
       res.sendFile(path.join(FRONTEND_DIST_DIR, 'index.html'));
     });
     console.log(`[fileServer] Serving frontend build from ${FRONTEND_DIST_DIR}`);

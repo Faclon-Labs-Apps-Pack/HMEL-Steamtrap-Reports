@@ -28,7 +28,7 @@ import { applyPrintLayout, applySummaryPrintLayout, formatReportDate } from './p
 import type { Device } from '../types/device';
 
 /** Restrict a device list to specific units (by env-key) — includes `unitKeys`, or all except `excludeUnitKeys`. */
-function filterDevicesByUnit(devices: Device[], opts?: { unitKeys?: string[]; excludeUnitKeys?: string[] }): Device[] {
+export function filterDevicesByUnit(devices: Device[], opts?: { unitKeys?: string[]; excludeUnitKeys?: string[] }): Device[] {
   if (opts?.unitKeys) {
     const keep = new Set(opts.unitKeys);
     return devices.filter((d) => keep.has(envKey(extractDepartmentFromTags(d.tags) ?? UNASSIGNED)));

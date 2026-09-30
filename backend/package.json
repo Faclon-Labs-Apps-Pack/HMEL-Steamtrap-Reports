@@ -9,6 +9,7 @@
     "generate:daily": "tsx src/generateReports.ts --daily",
     "log:export": "tsx src/exportReportLog.ts",
     "start": "tsx src/scheduler.ts",
+    "admin": "tsx src/adminServer.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
