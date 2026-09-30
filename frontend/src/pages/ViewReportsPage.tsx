@@ -18,6 +18,7 @@ import { Button } from '@faclon-labs/design-sdk/Button';
 import { Modal, ModalHeader, ModalBody, ModalFooter } from '@faclon-labs/design-sdk/Modal';
 import { SelectInput } from '@faclon-labs/design-sdk/SelectInput';
 import { DropdownMenu, ActionListItem } from '@faclon-labs/design-sdk/DropdownMenu';
+import { Download } from 'lucide-react';
 import { fetchReportLog, downloadUrlForEntry, type ReportLogEntry } from '../services/adminApi';
 
 interface FilterOption {
@@ -259,7 +260,7 @@ export function ReportLogTable({ reloadToken }: { reloadToken?: number }) {
             data={{ nodes: rows }}
             pagination
             defaultPageSize={25}
-            toolbar={<TableToolbar title="Report Send Log" subtitle={`${rows.length} shown of ${total} entries (newest first)`} />}
+            toolbar={<TableToolbar title="Report Logs" subtitle={`${rows.length} shown of ${total} entries (newest first)`} />}
             footer={<TablePagination />}
           >
             {(visibleRows: LogRow[]) => (
@@ -294,8 +295,14 @@ export function ReportLogTable({ reloadToken }: { reloadToken?: number }) {
                       </TableCell>
                       <TableCell contentType="text">
                         {row.downloadable && row.fileName ? (
-                          <a href={downloadUrlForEntry(row)} download className="BodySmallRegular">
-                            Download
+                          <a
+                            href={downloadUrlForEntry(row)}
+                            download
+                            title={`Download ${row.fileName}`}
+                            aria-label={`Download ${row.fileName}`}
+                            className="ui-download-btn"
+                          >
+                            <Download size={16} aria-hidden />
                           </a>
                         ) : (
                           <CellText title="—" />

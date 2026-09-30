@@ -96,6 +96,25 @@ a:hover {
   animation: ui-fade-in var(--ui-dur-slow) var(--ui-ease) both;
 }
 
+/* ---- Download icon button (report-log rows) ---- */
+.ui-download-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 6px;
+  color: var(--ui-accent);
+  border: 1px solid var(--border-neutral-default, #dcdfe4);
+  transition: background-color var(--ui-dur) var(--ui-ease), border-color var(--ui-dur) var(--ui-ease),
+    color var(--ui-dur) var(--ui-ease);
+}
+.ui-download-btn:hover {
+  background: var(--ui-ring);
+  border-color: var(--ui-accent);
+  opacity: 1; /* override the generic a:hover fade — the background is the affordance here */
+}
+
 /* ---- App header ---- */
 .ui-app-header {
   display: flex;
