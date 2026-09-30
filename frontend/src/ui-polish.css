@@ -115,6 +115,13 @@ a:hover {
   opacity: 1; /* override the generic a:hover fade — the background is the affordance here */
 }
 
+/* ---- Status badges ---- */
+/* The design-sdk Small badge ships with very tight padding (0 4px), so longer status words
+   ('generated', 'generation-failed') read cramped. Give them a touch more breathing room. */
+.fds-badge--size-small {
+  padding: 2px 8px !important;
+}
+
 /* ---- App header ---- */
 .ui-app-header {
   display: flex;
