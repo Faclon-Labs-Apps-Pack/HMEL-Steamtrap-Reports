@@ -263,6 +263,18 @@ export const GENERATED_DIR = process.env.REPORT_GENERATED_DIR ?? new URL('../gen
 // directory is the one location proven to survive platform redeploys (the send-log history does).
 export const OVERRIDES_FILE = process.env.REPORT_OVERRIDES_FILE ?? path.join(LOG_DIR, 'report-overrides.txt');
 
+// The daily-stats cache: one JSON file per day of per-device S1 status counts, summed to form
+// WTD/MTD/YTD instead of re-sweeping the whole range from IOsense's flaky bulk endpoint every run
+// (see services/dailyStatsStore.ts). Lives UNDER LOG_DIR for the same reason as OVERRIDES_FILE —
+// it's the one directory that survives platform redeploys.
+export const STATS_DIR = process.env.REPORT_STATS_DIR ?? path.join(LOG_DIR, 'daily-stats');
+
+// Kill switch: set STATS_CACHE_ENABLED=false to instantly fall back to the old behaviour of
+// live-sweeping WTD/MTD/YTD from IOsense per run (then restart). Defaults ON.
+export function isStatsCacheEnabled(): boolean {
+  return (process.env.STATS_CACHE_ENABLED ?? 'true').trim().toLowerCase() !== 'false';
+}
+
 // Port for the STANDALONE admin/test server (src/adminServer.ts) — the admin API + frontend
 // WITHOUT the scheduler (it never generates on a timer and never sends email). The production
 // entry point (src/scheduler.ts) instead serves the same admin API on FILE_SERVER_PORT.
