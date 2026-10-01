@@ -110,15 +110,21 @@ interface GetAutoDownSampledResponse {
  * request failed while the same token worked for every other endpoint; the reference project
  * that first used this endpoint chunks it in small batches for the same reason). So we split into
  * batches of this many (devID, sensor) pairs and merge the results.
+ *
+ * Kept small (10): the endpoint's HTTP-200 `{"success":false}` failures scale with the PER-CALL
+ * load (device count × time-range), and the heavy MTD/YTD sweeps over a growing roster (~835
+ * devices) push a 20-pair call past what the endpoint reliably computes. Smaller calls succeed far
+ * more often; `fetchBatchWithSplitRetry` halves any batch that still fails so one bad device can't
+ * sink its neighbours. More HTTP calls, but the device-rate budget below paces them the same way.
  */
-const BULK_TIME_SERIES_BATCH_SIZE = 20;
+const BULK_TIME_SERIES_BATCH_SIZE = 10;
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 // IOsense enforces a DEVICE rate limit on getAutoDownSampledData per rolling 30-second window. The
 // limit was tightened to 100 devices/30s (confirmed live 2026-09-01: "Device rate limit exceeded:
 // 100 of 100 devices already requested in the current 30-second window … Retry after 2 seconds").
-// We cap ourselves at 80 (= 4 batches of BULK_TIME_SERIES_BATCH_SIZE) — a stable ~20% margin under
+// We cap ourselves at 80 devices/30s — a stable ~20% margin under
 // the 100 hard limit, which absorbs an extra concurrent request without tripping it, while still
 // finishing within the report's lead time. This budget is MODULE-LEVEL on purpose — it is shared
 // across ALL concurrent report runs (the weekly and daily reports fire together and share the same
@@ -179,6 +185,42 @@ async function fetchBulkTimeSeriesBatchWithRetry(
     }
   }
   throw lastError;
+}
+
+/**
+ * Fetches a batch, and if it still fails after its retries, SPLITS it in half and retries each
+ * half (recursively, down to a single pair). The endpoint's failures scale with per-call load, so a
+ * batch that fails whole very often succeeds once halved; this isolates a genuinely-bad device
+ * instead of discarding all its neighbours. Returns the data it could get plus the count of
+ * individual (devID, sensor) pairs that still failed even alone — the caller uses that to decide
+ * whether the overall run is salvageable (a few bad devices) or a real outage (abort).
+ */
+async function fetchBatchWithSplitRetry(
+  pairs: { devID: string; sensor: string }[],
+  startMs: number,
+  endMs: number,
+  downscale: number,
+): Promise<{ result: Map<string, TimeSeriesPoint[]>; failedPairs: number }> {
+  try {
+    // Fewer attempts per level (3) than before — splitting, not just repeating, is what recovers a
+    // load-driven failure, so fail over to a split sooner.
+    const result = await fetchBulkTimeSeriesBatchWithRetry(pairs, startMs, endMs, downscale, 3);
+    return { result, failedPairs: 0 };
+  } catch (err) {
+    if (pairs.length <= 1) {
+      console.warn(
+        `[bulkTimeSeries] device ${pairs[0]?.devID ?? '?'} failed even alone after retries — no readings for this window: ${(err as Error).message}`,
+      );
+      return { result: new Map(), failedPairs: pairs.length };
+    }
+    const mid = Math.floor(pairs.length / 2);
+    console.warn(`[bulkTimeSeries] batch of ${pairs.length} failed — splitting into ${mid}+${pairs.length - mid} and retrying.`);
+    const [a, b] = await Promise.all([
+      fetchBatchWithSplitRetry(pairs.slice(0, mid), startMs, endMs, downscale),
+      fetchBatchWithSplitRetry(pairs.slice(mid), startMs, endMs, downscale),
+    ]);
+    return { result: new Map([...a.result, ...b.result]), failedPairs: a.failedPairs + b.failedPairs };
+  }
 }
 
 /** Fetches one batch of (devID, sensor) pairs from getAutoDownSampledData. */
@@ -263,28 +305,27 @@ export async function getBulkDeviceTimeSeries(
   // render as "No Status" — and the run continues. BUT if a large share of batches fail, that's a
   // real endpoint outage, not a blip: abort loudly rather than email a report where a big chunk of
   // devices falsely show No Status.
-  let failedBatches = 0;
+  let failedPairs = 0;
   const batchResults = await runWithConcurrencyLimit(batches, 2, async (batch) => {
-    try {
-      return await fetchBulkTimeSeriesBatchWithRetry(batch, startMs, endMs, downscale);
-    } catch (err) {
-      failedBatches++;
-      console.warn(
-        `[bulkTimeSeries] batch of ${batch.length} pair(s) failed after all retries — degrading those devices to "no readings" and continuing: ${(err as Error).message}`,
-      );
-      return new Map<string, TimeSeriesPoint[]>();
-    }
+    const { result, failedPairs: f } = await fetchBatchWithSplitRetry(batch, startMs, endMs, downscale);
+    failedPairs += f;
+    return result;
   });
 
-  const BULK_FAIL_ABORT_RATIO = 0.25; // >25% of batches failing = treat as an outage, not a blip
-  if (batches.length > 0 && failedBatches / batches.length > BULK_FAIL_ABORT_RATIO) {
+  // Measured at DEVICE granularity (batches split, so a batch count no longer means much): a handful
+  // of devices the endpoint simply won't return are degraded to "no readings" (they render "No
+  // Status" for the window) and the report still goes out. But if more than this share of ALL
+  // devices failed even when requested alone, that's a real IOsense outage — abort loudly rather
+  // than email a report where a big chunk of devices falsely show No Status.
+  const BULK_FAIL_ABORT_RATIO = 0.25;
+  if (pairs.length > 0 && failedPairs / pairs.length > BULK_FAIL_ABORT_RATIO) {
     throw new ApiError(
-      `Bulk time series: ${failedBatches}/${batches.length} batches failed after retries — aborting ` +
-        `(likely an IOsense bulk-endpoint outage, not a transient blip).`,
+      `Bulk time series: ${failedPairs}/${pairs.length} devices failed after retries + split — aborting ` +
+        `(likely an IOsense getAutoDownSampledData outage, not a transient blip).`,
     );
   }
-  if (failedBatches > 0) {
-    console.warn(`[bulkTimeSeries] ${failedBatches}/${batches.length} batch(es) degraded to empty; report continues.`);
+  if (failedPairs > 0) {
+    console.warn(`[bulkTimeSeries] ${failedPairs}/${pairs.length} device(s) degraded to no-data; report continues.`);
   }
 
   const merged = new Map<string, TimeSeriesPoint[]>();
