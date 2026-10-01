@@ -256,9 +256,36 @@ export async function getBulkDeviceTimeSeries(
 
   // Low concurrency (2) + per-batch retry keeps the total request rate gentle enough that the
   // endpoint's intermittent under-load failures recover instead of failing the whole report.
-  const batchResults = await runWithConcurrencyLimit(batches, 2, (batch) =>
-    fetchBulkTimeSeriesBatchWithRetry(batch, startMs, endMs, downscale),
-  );
+  //
+  // Resilience: a single batch that still fails after all its retries must NOT abort the entire
+  // daily (that one "{"success":false,"errors":[{}]}" blip sank all 20 units on 2026-10-01). So a
+  // failed batch degrades to empty — those ~20 devices simply have no readings for the window and
+  // render as "No Status" — and the run continues. BUT if a large share of batches fail, that's a
+  // real endpoint outage, not a blip: abort loudly rather than email a report where a big chunk of
+  // devices falsely show No Status.
+  let failedBatches = 0;
+  const batchResults = await runWithConcurrencyLimit(batches, 2, async (batch) => {
+    try {
+      return await fetchBulkTimeSeriesBatchWithRetry(batch, startMs, endMs, downscale);
+    } catch (err) {
+      failedBatches++;
+      console.warn(
+        `[bulkTimeSeries] batch of ${batch.length} pair(s) failed after all retries — degrading those devices to "no readings" and continuing: ${(err as Error).message}`,
+      );
+      return new Map<string, TimeSeriesPoint[]>();
+    }
+  });
+
+  const BULK_FAIL_ABORT_RATIO = 0.25; // >25% of batches failing = treat as an outage, not a blip
+  if (batches.length > 0 && failedBatches / batches.length > BULK_FAIL_ABORT_RATIO) {
+    throw new ApiError(
+      `Bulk time series: ${failedBatches}/${batches.length} batches failed after retries — aborting ` +
+        `(likely an IOsense bulk-endpoint outage, not a transient blip).`,
+    );
+  }
+  if (failedBatches > 0) {
+    console.warn(`[bulkTimeSeries] ${failedBatches}/${batches.length} batch(es) degraded to empty; report continues.`);
+  }
 
   const merged = new Map<string, TimeSeriesPoint[]>();
   for (const batchResult of batchResults) {
