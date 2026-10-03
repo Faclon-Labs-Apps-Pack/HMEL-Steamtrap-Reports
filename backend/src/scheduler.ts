@@ -9,6 +9,8 @@ import {
   getWeeklyCategorySchedule,
   getWeeklyDefaultCron,
   getReportBaseUrl,
+  getStatsIngestCron,
+  isStatsCacheEnabled,
   OUTPUT_DIR,
   ARCHIVE_DIR,
 } from './config';
@@ -21,6 +23,19 @@ import { sendReportEmail } from './email/sendReportEmail';
 import { saveWorkbook } from './reportGeneration/saveWorkbook';
 import { generateManagementReportWorkbooks } from './reportGeneration/generateManagementReport';
 import { generateDailyReportWorkbooks } from './reportGeneration/generateDailyReport';
+import { findDevicesByType } from './services/iosenseApi';
+import { ensureDaysIngested, ingestDay } from './services/dailyStatsStore';
+import { MONITORING_START } from './lib/dateRange';
+import { sendOpsAlert, isAuthError } from './services/alerting';
+
+const STEAM_TRAP_DEVICE_TYPE = 'steam trap';
+
+/** Shared auth-failure hint — the PAT doesn't expire, so a 401 means it was rotated/revoked by an admin. */
+function authHint(err: unknown): string {
+  return isAuthError(err)
+    ? 'LIKELY CAUSE: the IOSENSE_PAT was rotated/revoked (it does not expire on its own). Issue a fresh PAT, put it in .env, and restart the service with `pm2 restart <app> --update-env`.'
+    : 'Check service logs and the IOsense getAutoDownSampledData endpoint. The daily-stats cache should keep this light — if it is a bulk-endpoint outage the run aborts rather than emailing a report full of false "No Status".';
+}
 
 
 /**
@@ -51,6 +66,15 @@ async function generateWeekly(occurrence: Date, opts?: { categories?: string[] }
       section: opts?.categories?.join(', ') ?? '(all categories)',
       status: 'generation-failed',
       error: err instanceof Error ? err.message : String(err),
+    });
+    await sendOpsAlert({
+      subject: 'Weekly report generation FAILED',
+      lines: [
+        'Stage: generation — NO weekly emails were sent for this run.',
+        `Scope: ${opts?.categories?.join(', ') ?? 'all categories'}`,
+        `Error: ${err instanceof Error ? err.message : String(err)}`,
+        authHint(err),
+      ],
     });
     throw err;
   }
@@ -146,6 +170,15 @@ async function generateDaily(
       status: 'generation-failed',
       error: err instanceof Error ? err.message : String(err),
     });
+    await sendOpsAlert({
+      subject: 'Daily report generation FAILED',
+      lines: [
+        'Stage: generation — NO daily emails were sent for this run.',
+        `Scope: ${opts?.unitKeys?.join(', ') ?? 'all units'}`,
+        `Error: ${err instanceof Error ? err.message : String(err)}`,
+        authHint(err),
+      ],
+    });
     throw err;
   }
 
@@ -208,12 +241,28 @@ async function generateDaily(
 
 /** Sends each unit's daily email independently — one unit failing doesn't block the others. */
 async function sendPendingList(pendings: PendingEmail[]): Promise<void> {
+  const failures: { pending: PendingEmail; err: unknown }[] = [];
   for (const pending of pendings) {
     try {
       await sendPending(pending);
     } catch (err) {
       console.error(`[sendPending] Send failed for ${pending.fileName} — continuing with the rest:`, err);
+      failures.push({ pending, err });
     }
+  }
+  // Detection layer: if any report that was generated couldn't be emailed, alert immediately — the
+  // run otherwise completes "quietly" and the gap is only noticed when a recipient complains.
+  if (failures.length > 0) {
+    const first = failures[0].err;
+    await sendOpsAlert({
+      subject: `${failures.length}/${pendings.length} report email(s) FAILED to send`,
+      lines: [
+        'Stage: send — these reports were generated but their emails did not go out:',
+        ...failures.map((f) => `• ${f.pending.section} (${f.pending.fileName}): ${f.err instanceof Error ? f.err.message : String(f.err)}`),
+        '',
+        authHint(first),
+      ],
+    });
   }
 }
 
@@ -298,12 +347,68 @@ async function recoverPendingEmails(): Promise<void> {
   }
 }
 
+/**
+ * Nightly daily-stats pre-ingest. Runs AFTER the day completes (STATS_INGEST_TIME, default 00:30
+ * IST) and BEFORE the morning reports, so the report's cache path finds every day already stored and
+ * does ZERO heavy live S1 work on its critical path. This is the structural fix for the flaky
+ * getAutoDownSampledData endpoint: the only S1 load left anywhere is one light 24h fetch per day,
+ * done here off the report's deadline. Fills any gaps since MONITORING_START (idempotent) and
+ * force-refreshes the just-completed day so a partial earlier ingest can't leave a stuck bucket.
+ * Fail-open: a failure alerts + reschedules; the report's own ensureDaysIngested still self-heals.
+ */
+async function runDailyStatsIngest(): Promise<void> {
+  if (!isStatsCacheEnabled()) {
+    console.log('[stats-ingest] Cache disabled (STATS_CACHE_ENABLED=false) — skipping pre-ingest.');
+    return;
+  }
+  const devices = await findDevicesByType(STEAM_TRAP_DEVICE_TYPE);
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+  const { ingested, skipped } = await ensureDaysIngested(devices, MONITORING_START, yesterday, (m) =>
+    console.log(`[stats-ingest] ${m}`),
+  );
+  await ingestDay(devices, yesterday); // force-refresh the just-completed day for a guaranteed-complete bucket
+  console.log(
+    `[stats-ingest] Done through ${yesterday.toDateString()} — ${devices.length} devices, ${ingested} day(s) ingested, ${skipped} already present.`,
+  );
+}
+
+/** Wraps the pre-ingest so a failure alerts but never crashes the scheduler. */
+async function runDailyStatsIngestSafe(): Promise<void> {
+  try {
+    await runDailyStatsIngest();
+  } catch (err) {
+    console.error('[stats-ingest] FAILED:', err);
+    await sendOpsAlert({
+      subject: 'Nightly daily-stats pre-ingest FAILED',
+      lines: [
+        'The overnight cache pre-ingest failed. Reports can still self-heal at generation time, but',
+        'this is an early warning that the S1 endpoint (or auth) is unhealthy before the morning run.',
+        `Error: ${err instanceof Error ? err.message : String(err)}`,
+        authHint(err),
+      ],
+    });
+  }
+}
+
 /** The two client-defined weekly categories (each its own parent unit in the report). */
 const WEEKLY_CATEGORIES = ['Refinery', 'Petchem'];
 
 async function main() {
   startFileServer();
   await recoverPendingEmails();
+
+  // --- Daily-stats pre-ingest: keep the cache warm off the report's critical path (see
+  // runDailyStatsIngest). Reuses the two-phase scheduler with a no-op "send" — the ingest IS the work.
+  if (isStatsCacheEnabled()) {
+    const ingestCron = getStatsIngestCron();
+    if (ingestCron) {
+      console.log(`[scheduler] Daily-stats pre-ingest: ${ingestCron} (STATS_INGEST_TIME).`);
+      scheduleReport('stats-ingest', ingestCron, async () => runDailyStatsIngestSafe(), async () => {});
+    }
+  } else {
+    console.log('[scheduler] Daily-stats cache DISABLED — pre-ingest not scheduled (reports will live-sweep).');
+  }
 
   // --- Weekly: each category on its own <CATEGORY>_WEEKLY_DAY/TIME if set, else grouped under
   // the shared WEEKLY_REPORT_DAY/TIME.
