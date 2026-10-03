@@ -96,6 +96,15 @@ function parseRecipients(name: string): string[] {
     .filter(Boolean);
 }
 
+/**
+ * Recipients of operational failure alerts (comma-separated ALERT_RECIPIENTS) — emailed when a
+ * scheduled run fails to generate or a report fails to send. Empty = alerting disabled (a warning is
+ * logged instead). Keep this to the ops/monitoring team, NOT the plant distribution lists.
+ */
+export function getAlertRecipients(): string[] {
+  return parseRecipients('ALERT_RECIPIENTS');
+}
+
 /** Env-var-safe key for a unit/category name: uppercased, runs of non-alphanumerics → a single underscore. E.g. "DFCU (AU)" -> "DFCU_AU", "Petchem Offsite" -> "PETCHEM_OFFSITE". */
 export function envKey(name: string): string {
   return name.toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
@@ -181,6 +190,18 @@ export function getWeeklyDefaultCron(): string | null {
   if (day?.trim() && time?.trim()) return weeklyDayTimeToCron(day, time);
   const cron = process.env.WEEKLY_REPORT_CRON;
   return cron?.trim() ? cron : null;
+}
+
+/**
+ * When the nightly daily-stats pre-ingest job runs (STATS_INGEST_TIME, 24-hour HH:MM IST; default
+ * 00:30). It ingests the just-completed day into the cache BEFORE the morning report runs, so the
+ * report reads WTD/MTD/YTD purely from disk — zero heavy live S1 sweeps on the report's critical
+ * path. Only active when the cache is enabled. Returns null only if explicitly blanked.
+ */
+export function getStatsIngestCron(): string | null {
+  const time = (process.env.STATS_INGEST_TIME ?? '00:30').trim();
+  if (!time) return null;
+  return dailyTimeToCron(time);
 }
 
 /** Converts a plain 24-hour "HH:MM" into an every-day cron expression ("M H * * *"). */
