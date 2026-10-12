@@ -11,8 +11,62 @@ export interface DeviceTimeSeriesStats {
   statusPercentages: Record<StatusColumn, number>;
 }
 
+/**
+ * The RAW, additive form of a device's S1 stats for a window — reading COUNTS per status plus the
+ * total, not percentages. This is what the daily-stats cache stores per day: counts sum cleanly
+ * across days (percentages do not), so WTD/MTD/YTD can be rebuilt by summing daily buckets instead
+ * of re-sweeping the whole range from IOsense. See services/dailyStatsStore.ts.
+ */
+export interface DeviceStatCounts {
+  statusChangeCount: number;
+  counts: Record<StatusColumn, number>;
+  totalPoints: number;
+}
+
 function emptyPercentages(): Record<StatusColumn, number> {
   return Object.fromEntries(STATUS_COLUMNS.map((col) => [col, 0])) as Record<StatusColumn, number>;
+}
+
+function emptyCounts(): Record<StatusColumn, number> {
+  return Object.fromEntries(STATUS_COLUMNS.map((col) => [col, 0])) as Record<StatusColumn, number>;
+}
+
+/** Derives the percentage-based stats (what the reports consume) from raw counts. */
+export function countsToStats(c: DeviceStatCounts): DeviceTimeSeriesStats {
+  const percentages = emptyPercentages();
+  if (c.totalPoints > 0) {
+    for (const col of STATUS_COLUMNS) percentages[col] = (c.counts[col] / c.totalPoints) * 100;
+  }
+  return { statusChangeCount: c.statusChangeCount, statusPercentages: percentages };
+}
+
+/**
+ * Like {@link getTimeSeriesStatsByDevice} but returns the RAW counts (for the daily-stats cache).
+ * One bulk S1 fetch for the window; callers use this for a single DAY (light, reliable) and persist
+ * the result, then sum days to form longer windows.
+ */
+export async function getStatCountsByDevice(
+  devices: Device[],
+  startMs: number,
+  endMs: number,
+): Promise<Map<string, DeviceStatCounts>> {
+  const seriesByDevID = await getBulkDeviceTimeSeries(
+    devices.map((d) => ({ devID: d.devID, sensor: STATUS_SENSOR })),
+    startMs,
+    endMs,
+  );
+  const result = new Map<string, DeviceStatCounts>();
+  for (const device of devices) {
+    const points = seriesByDevID.get(device.devID) ?? [];
+    const counts = emptyCounts();
+    for (const point of points) counts[classifyStatus(point.value)] += 1;
+    result.set(device.devID, {
+      statusChangeCount: countStatusChanges(points),
+      counts,
+      totalPoints: points.length,
+    });
+  }
+  return result;
 }
 
 /**

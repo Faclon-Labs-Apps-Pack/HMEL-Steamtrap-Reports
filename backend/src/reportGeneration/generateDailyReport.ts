@@ -5,6 +5,7 @@ import { findDevicesByType, getLastDataPoints } from '../services/iosenseApi';
 import { getCorrectiveActions, type CorrectiveActionRecord } from '../services/correctiveActionApi';
 import { getFeedbackDatesByDevice } from '../services/feedbackApi';
 import { getTimeSeriesStatsByDevice, type DeviceTimeSeriesStats } from '../services/deviceTimeSeriesStats';
+import { aggregateStatsFromStore, ensureDaysIngested } from '../services/dailyStatsStore';
 import { getDevicePropertiesByDevice } from '../services/devicePropertiesApi';
 import { getSteamLossByDevice, getSteamSavingByDevice, getSteamConsumptionTotal } from '../services/steamConsumptionApi';
 import { buildDailyAnalysisRows, buildDailyLiveStatusRows } from '../lib/buildDailyReportRows';
@@ -14,11 +15,12 @@ import {
   getMonthToDateRange,
   getTillDateRange,
   toEpochMs,
+  MONITORING_START,
   type DateRange,
 } from '../lib/dateRange';
 import { extractDepartmentFromTags } from '../lib/departmentTag';
 import { derivePlantCategory, UNASSIGNED } from '../lib/plantCategory';
-import { envKey } from '../config';
+import { envKey, isStatsCacheEnabled } from '../config';
 import { dailyReportFileName, dailyReportName } from '../lib/reportNaming';
 import { HMEL_LOGO_DAILY_BASE64 } from './hmelLogo';
 import { buildDailySummarySheet, type SummaryWindowValues } from './buildDailySummarySheet';
@@ -156,21 +158,48 @@ export async function generateDailyReportWorkbooks(
   const feedbackDatesByDevID = await getFeedbackDatesByDevice(devices);
   const feedbackCountByDevID = new Map([...feedbackDatesByDevID].map(([id, dates]) => [id, dates.length])); // all-time, for the Analysis sheet
 
-  report(`Analyzing S1 history (today) for ${devices.length} devices…`);
-  const timeSeriesStatsByDevID = await getTimeSeriesStatsByDevice(devices, startMs, endMs);
-  report('Analyzing S1 history (WTD)…');
-  const wtdStats = await getTimeSeriesStatsByDevice(devices, toEpochMs(wtdRange.start), endMs);
-  // Fast mode (design/testing): compute only DTD + WTD. The MTD and YTD windows require two more
-  // full-fleet S1 sweeps (YTD ≈ the whole financial year) — the slowest part — so they're skipped
-  // and their Summary cells shown as 0.
+  // S1 status stats per window (DTD/WTD/MTD/YTD). Two paths:
+  //  - CACHE (default): read from the daily-stats store — one light 24h fetch per NEW day, then sum
+  //    stored day-buckets for WTD/MTD/YTD. Avoids the heavy long-range sweeps against the flaky
+  //    getAutoDownSampledData endpoint. The store is global (all devices), so ingestion always uses
+  //    the full fleet and per-unit runs cooperate idempotently; the report day's bucket doubles as
+  //    the DTD (report-day) data.
+  //  - LIVE (STATS_CACHE_ENABLED=false, or a custom `range`/`fast` run): the original behaviour —
+  //    live-sweep each window from IOsense. The revert path if the cache ever misbehaves.
+  const useCache = isStatsCacheEnabled() && !opts?.range && !opts?.fast;
   const emptyStats = new Map<string, DeviceTimeSeriesStats>();
+  let timeSeriesStatsByDevID: Map<string, DeviceTimeSeriesStats>;
+  let wtdStats: Map<string, DeviceTimeSeriesStats>;
   let mtdStats = emptyStats;
   let ytdStats = emptyStats;
-  if (!opts?.fast) {
-    report('Analyzing S1 history (MTD)…');
-    mtdStats = await getTimeSeriesStatsByDevice(devices, toEpochMs(mtdRange.start), endMs);
-    report('Analyzing S1 history (YTD)…');
-    ytdStats = await getTimeSeriesStatsByDevice(devices, toEpochMs(ytdRange.start), endMs);
+
+  if (useCache) {
+    // Catch up the store for ALL devices through the report day (fills the report day + any gaps from
+    // prior outages; each missing day is one light 24h fetch). Idempotent across per-unit runs.
+    report('Updating daily-stats cache…');
+    await ensureDaysIngested(allDevices, MONITORING_START, range.end, (m) => report(m));
+    const reportDay = range.end;
+    const wtdFrom = new Date(reportDay);
+    wtdFrom.setDate(wtdFrom.getDate() - 6); // 7 calendar days ending on the report day
+    const mtdFrom = new Date(reportDay.getFullYear(), reportDay.getMonth(), 1);
+    timeSeriesStatsByDevID = aggregateStatsFromStore(reportDay, reportDay, allDevIDs);
+    wtdStats = aggregateStatsFromStore(wtdFrom, reportDay, allDevIDs);
+    mtdStats = aggregateStatsFromStore(mtdFrom, reportDay, allDevIDs);
+    ytdStats = aggregateStatsFromStore(MONITORING_START, reportDay, allDevIDs);
+  } else {
+    report(`Analyzing S1 history (today) for ${devices.length} devices…`);
+    timeSeriesStatsByDevID = await getTimeSeriesStatsByDevice(devices, startMs, endMs);
+    report('Analyzing S1 history (WTD)…');
+    wtdStats = await getTimeSeriesStatsByDevice(devices, toEpochMs(wtdRange.start), endMs);
+    // Fast mode (design/testing): compute only DTD + WTD. The MTD and YTD windows require two more
+    // full-fleet S1 sweeps (YTD ≈ the whole financial year) — the slowest part — so they're skipped
+    // and their Summary cells shown as 0.
+    if (!opts?.fast) {
+      report('Analyzing S1 history (MTD)…');
+      mtdStats = await getTimeSeriesStatsByDevice(devices, toEpochMs(mtdRange.start), endMs);
+      report('Analyzing S1 history (YTD)…');
+      ytdStats = await getTimeSeriesStatsByDevice(devices, toEpochMs(ytdRange.start), endMs);
+    }
   }
 
   report(`Loading device properties (pressure, baseline temps, leak rate) for ${devices.length} devices…`);

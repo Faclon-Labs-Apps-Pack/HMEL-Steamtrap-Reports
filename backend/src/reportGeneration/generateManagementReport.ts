@@ -4,6 +4,8 @@ type Workbook = InstanceType<typeof Workbook>;
 import { findDevicesByType, getLastDataPoints } from '../services/iosenseApi';
 import { getCorrectiveActions, type CorrectiveActionRecord } from '../services/correctiveActionApi';
 import { getTimeSeriesStatsByDevice, type DeviceTimeSeriesStats } from '../services/deviceTimeSeriesStats';
+import { aggregateStatsFromStore, ensureDaysIngested } from '../services/dailyStatsStore';
+import { isStatsCacheEnabled } from '../config';
 import { getSteamConsumptionTotal } from '../services/steamConsumptionApi';
 import { extractDepartmentFromTags } from '../lib/departmentTag';
 import { derivePlantCategory, normalizeUnit, CATEGORY_UNIT_ROSTER, UNASSIGNED } from '../lib/plantCategory';
@@ -14,6 +16,7 @@ import {
   getTillDateRange,
   normalizeDateRange,
   toEpochMs,
+  MONITORING_START,
   type DateRange,
 } from '../lib/dateRange';
 import { weeklyReportName, weeklyReportFileName } from '../lib/reportNaming';
@@ -135,12 +138,28 @@ export async function generateManagementReportWorkbooks(
   report('Loading corrective actions (YTD)…');
   const ytdRecords = await getCorrectiveActions(devices.map((d) => d.devID), { startMs: toEpochMs(ytdRange.start), endMs });
 
-  report('Analyzing S1 history (WTD)…');
-  const wtdStats = await getTimeSeriesStatsByDevice(devices, toEpochMs(wtdRange.start), endMs);
-  report('Analyzing S1 history (MTD)…');
-  const mtdStats = await getTimeSeriesStatsByDevice(devices, toEpochMs(mtdRange.start), endMs);
-  report('Analyzing S1 history (YTD)…');
-  const ytdStats = await getTimeSeriesStatsByDevice(devices, toEpochMs(ytdRange.start), endMs);
+  // S1 status stats per window. CACHE path (default): sum the daily-stats store (one light fetch per
+  // new day) instead of live-sweeping these long ranges against the flaky bulk endpoint. LIVE path
+  // (STATS_CACHE_ENABLED=false): the original per-window sweeps — the revert fallback. The weekly's
+  // windows are already whole-calendar-day ranges, so the day-bucket sums line up directly.
+  let wtdStats: Map<string, DeviceTimeSeriesStats>;
+  let mtdStats: Map<string, DeviceTimeSeriesStats>;
+  let ytdStats: Map<string, DeviceTimeSeriesStats>;
+  if (isStatsCacheEnabled()) {
+    report('Updating daily-stats cache…');
+    await ensureDaysIngested(devices, MONITORING_START, range.end, report);
+    const devIDs = devices.map((d) => d.devID);
+    wtdStats = aggregateStatsFromStore(wtdRange.start, wtdRange.end, devIDs);
+    mtdStats = aggregateStatsFromStore(mtdRange.start, mtdRange.end, devIDs);
+    ytdStats = aggregateStatsFromStore(ytdRange.start, ytdRange.end, devIDs);
+  } else {
+    report('Analyzing S1 history (WTD)…');
+    wtdStats = await getTimeSeriesStatsByDevice(devices, toEpochMs(wtdRange.start), endMs);
+    report('Analyzing S1 history (MTD)…');
+    mtdStats = await getTimeSeriesStatsByDevice(devices, toEpochMs(mtdRange.start), endMs);
+    report('Analyzing S1 history (YTD)…');
+    ytdStats = await getTimeSeriesStatsByDevice(devices, toEpochMs(ytdRange.start), endMs);
+  }
 
   // One report per client-defined plant category (Refinery, Petchem) — always both, even if a
   // category has no devices this week. Devices that don't classify into either (untagged in
