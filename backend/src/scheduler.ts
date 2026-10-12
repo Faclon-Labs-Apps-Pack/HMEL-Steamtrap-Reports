@@ -27,6 +27,7 @@ import { findDevicesByType } from './services/iosenseApi';
 import { ensureDaysIngested, ingestDay } from './services/dailyStatsStore';
 import { MONITORING_START } from './lib/dateRange';
 import { sendOpsAlert, isAuthError } from './services/alerting';
+import { startFileServerWatchdog } from './scheduler/fileServerWatchdog';
 
 const STEAM_TRAP_DEVICE_TYPE = 'steam trap';
 
@@ -396,6 +397,9 @@ const WEEKLY_CATEGORIES = ['Refinery', 'Petchem'];
 
 async function main() {
   startFileServer();
+  // Guard against the file server silently losing its socket (as on 2026-10-08→12): if our own
+  // /report URL becomes unreachable, alert and self-restart so attachments stay fetchable.
+  startFileServerWatchdog();
   await recoverPendingEmails();
 
   // --- Daily-stats pre-ingest: keep the cache warm off the report's critical path (see
