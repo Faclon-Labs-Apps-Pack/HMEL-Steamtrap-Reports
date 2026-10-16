@@ -28,6 +28,19 @@ export const STATUS_COLUMNS = [
 export type StatusColumn = (typeof STATUS_COLUMNS)[number];
 
 /**
+ * Flooding statuses are DROPPED ENTIRELY from every report (client request 2026-10-16): no Flooding
+ * column anywhere, and flooding readings/traps are excluded from all counts, percentages and totals
+ * so the remaining statuses reconcile among themselves. This is the single source of truth for
+ * "what counts as flooding" — exclude these wherever a denominator or bucket is built.
+ */
+export const FLOODING_STATUSES: StatusColumn[] = ['Mild Flooding', 'Heavy Flooding'];
+
+/** True if a status is a (dropped) flooding state. */
+export function isFloodingStatus(status: StatusColumn): boolean {
+  return FLOODING_STATUSES.includes(status);
+}
+
+/**
  * Collapsed status buckets for the weekly Management Report's Unit vs Trap Status matrix, per
  * the client template ("report templates/ManagementReportFormat for Steam Traps (1) (1).xlsx"):
  * Choked | Flooding | Normal | Leak | No Status | Offline. Mild/Heavy variants fold into one
@@ -36,7 +49,6 @@ export type StatusColumn = (typeof STATUS_COLUMNS)[number];
  */
 export const GROUPED_STATUS_COLUMNS: { label: string; statuses: StatusColumn[] }[] = [
   { label: 'Choked', statuses: ['Choking'] },
-  { label: 'Flooding', statuses: ['Mild Flooding', 'Heavy Flooding'] },
   { label: 'Normal', statuses: ['Normal'] },
   { label: 'Leak', statuses: ['Mild Leak', 'Heavy Leak'] },
   { label: 'No Status', statuses: ['No Status', 'Valve Closed'] },

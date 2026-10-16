@@ -1,5 +1,5 @@
 import { getBulkDeviceTimeSeries } from './iosenseApi';
-import { classifyStatus, STATUS_COLUMNS, type StatusColumn } from '../lib/statusClassification';
+import { classifyStatus, STATUS_COLUMNS, FLOODING_STATUSES, isFloodingStatus, type StatusColumn } from '../lib/statusClassification';
 import { countStatusChanges } from '../lib/countStatusChanges';
 import type { Device } from '../types/device';
 
@@ -31,11 +31,20 @@ function emptyCounts(): Record<StatusColumn, number> {
   return Object.fromEntries(STATUS_COLUMNS.map((col) => [col, 0])) as Record<StatusColumn, number>;
 }
 
-/** Derives the percentage-based stats (what the reports consume) from raw counts. */
+/**
+ * Derives the percentage-based stats (what the reports consume) from raw counts. Flooding readings
+ * are DROPPED ENTIRELY (see FLOODING_STATUSES): excluded from the denominator and left at 0%, so the
+ * remaining statuses are shares of the non-flooding readings and sum to 100% among themselves.
+ */
 export function countsToStats(c: DeviceStatCounts): DeviceTimeSeriesStats {
   const percentages = emptyPercentages();
-  if (c.totalPoints > 0) {
-    for (const col of STATUS_COLUMNS) percentages[col] = (c.counts[col] / c.totalPoints) * 100;
+  const floodingPoints = FLOODING_STATUSES.reduce((s, col) => s + (c.counts[col] ?? 0), 0);
+  const base = c.totalPoints - floodingPoints; // non-flooding readings only
+  if (base > 0) {
+    for (const col of STATUS_COLUMNS) {
+      if (isFloodingStatus(col)) continue; // dropped
+      percentages[col] = (c.counts[col] / base) * 100;
+    }
   }
   return { statusChangeCount: c.statusChangeCount, statusPercentages: percentages };
 }
@@ -90,14 +99,21 @@ export async function getTimeSeriesStatsByDevice(
     const points = seriesByDevID.get(device.devID) ?? [];
     const statusChangeCount = countStatusChanges(points);
 
+    // Flooding readings are DROPPED ENTIRELY: excluded from the denominator and left at 0%, so the
+    // remaining statuses are shares of the non-flooding readings (see FLOODING_STATUSES).
     const percentages = emptyPercentages();
     if (points.length > 0) {
       const counts = emptyPercentages();
       for (const point of points) {
         counts[classifyStatus(point.value)] += 1;
       }
-      for (const col of STATUS_COLUMNS) {
-        percentages[col] = (counts[col] / points.length) * 100;
+      const floodingPoints = FLOODING_STATUSES.reduce((s, col) => s + counts[col], 0);
+      const base = points.length - floodingPoints;
+      if (base > 0) {
+        for (const col of STATUS_COLUMNS) {
+          if (isFloodingStatus(col)) continue; // dropped
+          percentages[col] = (counts[col] / base) * 100;
+        }
       }
     }
 

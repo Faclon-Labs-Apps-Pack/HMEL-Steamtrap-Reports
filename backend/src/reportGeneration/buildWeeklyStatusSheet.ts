@@ -18,7 +18,6 @@ export const WEEKLY_STATUS_GROUPS: { label: string; statuses: StatusColumn[] }[]
   { label: 'Normal', statuses: ['Normal'] },
   { label: 'Leak', statuses: ['Mild Leak', 'Heavy Leak'] },
   { label: 'Choked', statuses: ['Choking'] },
-  { label: 'Flooding', statuses: ['Mild Flooding', 'Heavy Flooding'] },
   { label: 'Isolated', statuses: ['Valve Closed'] },
   { label: 'No status', statuses: ['No Status'] },
   { label: 'Offline', statuses: ['Offline'] },
@@ -175,10 +174,14 @@ export function buildWeeklyStatusSheet(
   const statusTitleRow = 14;
   header(statusTitleRow, 1, NUM_COLS, `Steam Trap Status at ${formatDate(range.end)}`);
   const statusHeaderRow = statusTitleRow + 1; // 15
+  // Total occupies the first column after the status groups, spanning any remaining columns up to
+  // NUM_COLS so the table still fills the fixed 10-wide layout (the Performance table above needs
+  // all 10). Dropping the Flooding group leaves it spanning the last two columns instead of one.
+  const totalCol = 3 + WEEKLY_STATUS_GROUPS.length;
   header(statusHeaderRow, 1, 1, 'Sr. No.');
   header(statusHeaderRow, 2, 2, 'Unit Name');
   WEEKLY_STATUS_GROUPS.forEach((g, i) => header(statusHeaderRow, 3 + i, 3 + i, g.label));
-  header(statusHeaderRow, 3 + WEEKLY_STATUS_GROUPS.length, 3 + WEEKLY_STATUS_GROUPS.length, 'Total');
+  header(statusHeaderRow, totalCol, NUM_COLS, 'Total');
 
   let row = statusHeaderRow + 1;
   const totals = Object.fromEntries(WEEKLY_STATUS_GROUPS.map((g) => [g.label, 0])) as Record<string, number>;
@@ -191,7 +194,7 @@ export function buildWeeklyStatusSheet(
       dataCell(row, 3 + gi, 3 + gi, u.counts[g.label] ?? 0);
       totals[g.label] += u.counts[g.label] ?? 0;
     });
-    dataCell(row, 3 + WEEKLY_STATUS_GROUPS.length, 3 + WEEKLY_STATUS_GROUPS.length, u.total);
+    dataCell(row, totalCol, NUM_COLS, u.total);
     grandTotal += u.total;
     row += 1;
   });
@@ -204,7 +207,8 @@ export function buildWeeklyStatusSheet(
     cell.fill = BLUE_HEADER_FILL;
     cell.alignment = CENTER;
   });
-  const gtCell = sheet.getCell(statusTotalRow, 3 + WEEKLY_STATUS_GROUPS.length);
+  if (NUM_COLS > totalCol) sheet.mergeCells(statusTotalRow, totalCol, statusTotalRow, NUM_COLS);
+  const gtCell = sheet.getCell(statusTotalRow, totalCol);
   gtCell.value = grandTotal;
   gtCell.font = BOLD_FONT;
   gtCell.fill = BLUE_HEADER_FILL;

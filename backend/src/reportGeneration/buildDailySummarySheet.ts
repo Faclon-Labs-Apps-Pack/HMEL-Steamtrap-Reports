@@ -1,5 +1,5 @@
 import type { Worksheet } from 'exceljs';
-import { classifyStatus, type StatusColumn } from '../lib/statusClassification';
+import { classifyStatus, isFloodingStatus, type StatusColumn } from '../lib/statusClassification';
 import type { DateRange } from '../lib/dateRange';
 import type { Device, LastDataPoint } from '../types/device';
 import { ALL_BORDERS, BLUE_HEADER_FILL, BOLD_FONT, CENTER, HEADER_FONT, LEFT } from './xlsxStyles';
@@ -39,7 +39,6 @@ const SUMMARY_STATUS_GROUPS: { label: string; statuses: StatusColumn[] }[] = [
   { label: 'Normal', statuses: ['Normal'] },
   { label: 'Leak', statuses: ['Mild Leak', 'Heavy Leak'] },
   { label: 'Choked', statuses: ['Choking'] },
-  { label: 'Flooding', statuses: ['Mild Flooding', 'Heavy Flooding'] },
   { label: 'Isolated', statuses: ['Valve Closed'] },
   { label: 'No Status', statuses: ['No Status'] },
   { label: 'Offline', statuses: ['Offline'] },
@@ -83,12 +82,16 @@ export function buildDailySummarySheet(
   const statusCounts = Object.fromEntries(
     SUMMARY_STATUS_GROUPS.map((g) => [g.label, 0]),
   ) as Record<string, number>;
+  // Flooding traps are DROPPED ENTIRELY: excluded from the status breakdown AND from the trap total,
+  // so the per-status counts/percentages reconcile to the Total (all non-flooding traps).
+  let totalDevices = 0;
   for (const device of devices) {
     const status = classifyStatus(statusByDevID.get(device.devID));
+    if (isFloodingStatus(status)) continue; // dropped — counted nowhere
+    totalDevices += 1;
     const group = SUMMARY_STATUS_GROUPS.find((g) => g.statuses.includes(status));
     if (group) statusCounts[group.label] += 1;
   }
-  const totalDevices = devices.length;
 
   // --- Title block: logo on the left (constrained to header rows 1–2 — see addLogoHeader),
   // two-line report title across the rest.

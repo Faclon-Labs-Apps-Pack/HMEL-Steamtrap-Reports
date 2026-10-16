@@ -10,7 +10,6 @@ import { ALL_BORDERS, BLUE_HEADER_FILL, HEADER_FONT, RED_FONT, fitColumnWidths, 
  */
 const ANALYSIS_STATUS_GROUPS: { label: string; statuses: StatusColumn[] }[] = [
   { label: 'Normal', statuses: ['Normal'] },
-  { label: 'Flooding', statuses: ['Mild Flooding', 'Heavy Flooding'] },
   { label: 'Leak', statuses: ['Mild Leak', 'Heavy Leak'] },
   { label: 'Choking', statuses: ['Choking'] },
   { label: 'Valve Closed', statuses: ['Valve Closed'] },

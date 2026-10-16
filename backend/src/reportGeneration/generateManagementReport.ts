@@ -9,7 +9,7 @@ import { isStatsCacheEnabled } from '../config';
 import { getSteamConsumptionTotal } from '../services/steamConsumptionApi';
 import { extractDepartmentFromTags } from '../lib/departmentTag';
 import { derivePlantCategory, normalizeUnit, CATEGORY_UNIT_ROSTER, UNASSIGNED } from '../lib/plantCategory';
-import { classifyStatus } from '../lib/statusClassification';
+import { classifyStatus, isFloodingStatus } from '../lib/statusClassification';
 import {
   getLastWeekRange,
   getMonthToDateRange,
@@ -204,7 +204,9 @@ export async function generateManagementReportWorkbooks(
     const statusRows: WeeklyUnitStatusRow[] = unitRows.map(({ displayName, devices: unitDevices }) => ({
       unitName: displayName,
       counts: groupedStatusCounts(unitDevices, statusByDevID),
-      total: unitDevices.length,
+      // Flooding traps are DROPPED ENTIRELY — excluded from the Total so it reconciles with the
+      // per-status counts (which already skip flooding).
+      total: unitDevices.filter((d) => !isFloodingStatus(classifyStatus(statusByDevID.get(d.devID)))).length,
     }));
 
     const caRows: WeeklyUnitCARow[] = unitRows.map(({ displayName, devices: unitDevices }) => ({
