@@ -296,6 +296,23 @@ export function isStatsCacheEnabled(): boolean {
   return (process.env.STATS_CACHE_ENABLED ?? 'true').trim().toLowerCase() !== 'false';
 }
 
+// Delivery guard: before telling IOsense to fetch an attachment, HEAD-check our public /report URL
+// (the exact URL + proxy IOsense will use) so we never send into a dead URL; after sending, confirm
+// IOsense actually fetched (our file server deletes the file only on a successful download) and
+// resend if it didn't. Master toggle — set DELIVERY_GUARD_ENABLED=false to disable both. Default ON.
+export function isDeliveryGuardEnabled(): boolean {
+  return (process.env.DELIVERY_GUARD_ENABLED ?? 'true').trim().toLowerCase() !== 'false';
+}
+
+// How long (seconds) to wait after a send before judging a report "not fetched" by IOsense (the
+// file is still on disk → IOsense never downloaded it). Must be comfortably longer than IOsense's
+// normal fetch latency so a slow-but-successful fetch isn't mistaken for a miss. Default 90.
+export function getDeliveryConfirmWaitMs(): number {
+  const raw = process.env.DELIVERY_CONFIRM_WAIT_SECONDS;
+  const s = raw ? Number(raw) : 90;
+  return (Number.isFinite(s) && s > 0 ? s : 90) * 1000;
+}
+
 // Port for the STANDALONE admin/test server (src/adminServer.ts) — the admin API + frontend
 // WITHOUT the scheduler (it never generates on a timer and never sends email). The production
 // entry point (src/scheduler.ts) instead serves the same admin API on FILE_SERVER_PORT.

@@ -1,6 +1,7 @@
 import './setTimezone'; // MUST be first — pins the process to IST before any Date is created
 import path from 'node:path';
 import { stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import {
   getDailyRecipientsForUnit,
   getWeeklyRecipientsForCategory,
@@ -11,6 +12,8 @@ import {
   getReportBaseUrl,
   getStatsIngestCron,
   isStatsCacheEnabled,
+  isDeliveryGuardEnabled,
+  getDeliveryConfirmWaitMs,
   OUTPUT_DIR,
   ARCHIVE_DIR,
 } from './config';
@@ -240,12 +243,109 @@ async function generateDaily(
   return pendings;
 }
 
-/** Sends each unit's daily email independently — one unit failing doesn't block the others. */
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/**
+ * PRE-FLIGHT reachability check: HEAD our own public /report URL (the exact URL + proxy IOsense will
+ * pull from) so we never hand IOsense a dead URL. HEAD is NON-destructive on our file server (only a
+ * real GET deletes the file — see fileServer.ts), so this is safe to run before every send. Retries a
+ * few times over ~30s to ride out a transient blip. Returns true if a 2xx came back.
+ */
+async function isReportUrlReachable(url: string, attempts = 4): Promise<boolean> {
+  for (let i = 0; i < attempts; i++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10_000);
+    try {
+      const res = await fetch(url, { method: 'HEAD', signal: controller.signal });
+      if (res.ok) return true;
+      console.warn(`[delivery] pre-flight HEAD ${url} -> HTTP ${res.status} (attempt ${i + 1}/${attempts})`);
+    } catch (err) {
+      console.warn(`[delivery] pre-flight HEAD ${url} failed (attempt ${i + 1}/${attempts}): ${(err as Error).message}`);
+    } finally {
+      clearTimeout(timer);
+    }
+    if (i < attempts - 1) await sleep(5_000);
+  }
+  return false;
+}
+
+/**
+ * Was the report file consumed? Our file server deletes it ONLY after IOsense successfully downloads
+ * it, so "file gone from OUTPUT_DIR" == "IOsense fetched it" == delivered. Still present after the
+ * confirm window == IOsense never fetched == NOT delivered (safe to resend — a failed fetch means the
+ * email never arrived, so there is no duplicate).
+ */
+function reportFileConsumed(fileName: string): boolean {
+  return !existsSync(path.join(OUTPUT_DIR, fileName));
+}
+
+/** The actual IOsense sendEmail call for one pending report (shared by first send + resend). */
+async function emailReport(pending: PendingEmail): Promise<void> {
+  await sendReportEmail({
+    to: pending.recipients,
+    subject: pending.subject,
+    reportTitle: pending.reportTitle,
+    message: pending.message,
+    attachments: [{ url: pending.downloadUrl, fileName: pending.fileName }],
+  });
+}
+
+/**
+ * After a batch is sent, CONFIRM each report was actually fetched by IOsense (file consumed). Any
+ * still sitting on disk after the confirm window was never downloaded → resend once (the file is
+ * still there to fetch), wait again, and alert on anything still unfetched. This catches IOsense-side
+ * fetch misses that a pre-flight check cannot — the failure mode behind "email never reached the
+ * client" even though our side logged SENT.
+ */
+async function confirmBatchDelivery(sent: PendingEmail[]): Promise<void> {
+  if (!isDeliveryGuardEnabled() || sent.length === 0) return;
+  const waitMs = getDeliveryConfirmWaitMs();
+  await sleep(waitMs);
+
+  const notFetched = sent.filter((p) => !reportFileConsumed(p.fileName));
+  if (notFetched.length === 0) {
+    console.log(`[delivery] All ${sent.length} report(s) fetched by IOsense within ${waitMs / 1000}s — delivery confirmed.`);
+    return;
+  }
+  console.warn(`[delivery] ${notFetched.length}/${sent.length} report(s) NOT fetched by IOsense after ${waitMs / 1000}s — resending.`);
+  for (const pending of notFetched) {
+    try {
+      if (!(await isReportUrlReachable(pending.downloadUrl))) {
+        console.error(`[delivery] resend skipped for ${pending.fileName}: public URL still unreachable.`);
+        continue;
+      }
+      await emailReport(pending);
+      await logReport({ reportType: pending.reportType, section: pending.section, status: 'sent', fileName: pending.fileName, recipients: pending.recipients });
+      console.log(`[delivery] Resent ${pending.section} (${pending.fileName}).`);
+    } catch (err) {
+      console.error(`[delivery] Resend failed for ${pending.fileName}:`, err);
+    }
+  }
+
+  await sleep(waitMs);
+  const stillUnfetched = notFetched.filter((p) => !reportFileConsumed(p.fileName));
+  if (stillUnfetched.length > 0) {
+    await sendOpsAlert({
+      subject: `${stillUnfetched.length} report(s) NOT delivered (IOsense never fetched the attachment)`,
+      lines: [
+        'These reports were sent AND resent, but IOsense never downloaded the attachment, so they did',
+        'not reach recipients (the files are still on our server, unfetched):',
+        ...stillUnfetched.map((p) => `• ${p.section} (${p.fileName})`),
+        '',
+        `Check the public report URL is reachable: ${getReportBaseUrl()}/api/health`,
+      ],
+    });
+  }
+}
+
+/** Sends each unit's email independently — one unit failing doesn't block the others — then confirms IOsense actually fetched each. */
 async function sendPendingList(pendings: PendingEmail[]): Promise<void> {
   const failures: { pending: PendingEmail; err: unknown }[] = [];
+  const sent: PendingEmail[] = [];
   for (const pending of pendings) {
     try {
       await sendPending(pending);
+      sent.push(pending);
     } catch (err) {
       console.error(`[sendPending] Send failed for ${pending.fileName} — continuing with the rest:`, err);
       failures.push({ pending, err });
@@ -265,6 +365,8 @@ async function sendPendingList(pendings: PendingEmail[]): Promise<void> {
       ],
     });
   }
+  // Confirm IOsense actually downloaded each sent report; resend/alert on misses.
+  await confirmBatchDelivery(sent);
 }
 
 /**
@@ -291,14 +393,23 @@ async function verifyFileBeforeSend(fileName: string): Promise<void> {
 async function sendPending(pending: PendingEmail): Promise<void> {
   await verifyFileBeforeSend(pending.fileName);
   console.log(`[sendPending] Attachment URL IOsense will fetch: ${pending.downloadUrl}`);
-  try {
-    await sendReportEmail({
-      to: pending.recipients,
-      subject: pending.subject,
-      reportTitle: pending.reportTitle,
-      message: pending.message,
-      attachments: [{ url: pending.downloadUrl, fileName: pending.fileName }],
+
+  // PRE-FLIGHT: confirm IOsense can actually reach the attachment URL BEFORE we ask it to fetch.
+  // HEAD is non-destructive (doesn't consume the one-shot file). If the URL is down, sending just
+  // produces a silent non-delivery (sendEmail returns success regardless), so don't send — log,
+  // alert, and leave the pending entry for recovery to retry once the URL is healthy again.
+  if (isDeliveryGuardEnabled() && !(await isReportUrlReachable(pending.downloadUrl))) {
+    const msg = `Public report URL not reachable before send — IOsense would fail to fetch the attachment: ${pending.downloadUrl}`;
+    await logReport({ reportType: pending.reportType, section: pending.section, status: 'failed', fileName: pending.fileName, recipients: pending.recipients, error: msg });
+    await sendOpsAlert({
+      subject: `Report NOT sent — attachment URL unreachable (${pending.section})`,
+      lines: [msg, 'Left pending for retry. Check the file server and the public /report URL health.'],
     });
+    throw new Error(msg);
+  }
+
+  try {
+    await emailReport(pending);
   } catch (err) {
     // Log the failure with its reason; leave the pending entry in place so startup recovery retries it.
     await logReport({
