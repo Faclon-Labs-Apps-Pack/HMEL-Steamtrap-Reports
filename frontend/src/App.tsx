@@ -1,38 +1,56 @@
 import { useState } from 'react';
-import { Tabs, TabItem } from '@faclon-labs/design-sdk/Tabs';
-import { GenerateViewPage } from './pages/GenerateViewPage';
+import { GenerateReportPage } from './pages/GenerateReportPage';
+import { ViewReportsPage } from './pages/ViewReportsPage';
 import { ScheduleReportPage } from './pages/ScheduleReportPage';
+import { AuthGate } from './components/AuthGate';
+import type { Me } from './auth/session';
 
-// The report-admin app: the "Generate & View" tab (on-demand generation + the send log, merged per
-// client request 2026-09-30) and "Schedule Report". The old in-browser viewer pages still exist
-// under src/pages/ and can be re-added if ever needed.
-type Tab = 'generate-view' | 'schedule';
+// The report-admin app, gated by IOsense sub-user roles (2026-10-19): admins (main accounts)
+// get all three tabs; scoped read users get ONLY View Reports, server-filtered to their
+// sections. Tabs are plain accessible buttons with a sliding brand-blue underline.
+type Tab = 'generate' | 'view-reports' | 'schedule';
 
-function App() {
-  const [tab, setTab] = useState<Tab>('generate-view');
+const ALL_TABS: { id: Tab; label: string }[] = [
+  { id: 'generate', label: 'Generate Report' },
+  { id: 'view-reports', label: 'View Reports' },
+  { id: 'schedule', label: 'Schedule Reports' },
+];
+
+function Shell({ me }: { me: Me }) {
+  const isAdmin = me.access.kind === 'admin';
+  const tabs = isAdmin ? ALL_TABS : ALL_TABS.filter((t) => t.id === 'view-reports');
+  const [tab, setTab] = useState<Tab>(isAdmin ? 'generate' : 'view-reports');
 
   return (
-    <div>
-      <div className="global-p-06" style={{ paddingBottom: 0 }}>
-        <header className="ui-app-header">
-          <h1 className="HeadingSmallSemibold ui-app-title">Steam Trap Reports</h1>
-          <p className="BodySmallRegular ui-app-subtitle">
-            HMEL — generate, schedule and review steam-trap reports.
-          </p>
-        </header>
-        <Tabs value={tab} onChange={(value) => setTab(value as Tab)}>
-          <TabItem value="generate-view" label="Generate &amp; View" />
-          <TabItem value="schedule" label="Schedule Report" />
-        </Tabs>
-      </div>
+    <main className="ui-main">
+      {/* Session bar removed per client request 2026-10-19 — SessionBar in AuthGate.tsx can be
+          re-added here if identity/logout ever needs to be visible again. */}
+      <nav className="ui-tabs ui-tabs--light" role="tablist" aria-label="Report sections">
+        {tabs.map((t) => (
+          <button
+            key={t.id}
+            role="tab"
+            aria-selected={tab === t.id}
+            className={tab === t.id ? 'is-active' : ''}
+            onClick={() => setTab(t.id)}
+          >
+            {t.label}
+          </button>
+        ))}
+      </nav>
 
       {/* key={tab} remounts on switch so the .ui-page entrance plays each time. */}
-      <div className="ui-page" key={tab}>
-        {tab === 'generate-view' && <GenerateViewPage />}
-        {tab === 'schedule' && <ScheduleReportPage />}
+      <div className="ui-page ui-panel" key={tab}>
+        {tab === 'generate' && isAdmin && <GenerateReportPage />}
+        {tab === 'view-reports' && <ViewReportsPage scopeLabel={isAdmin ? undefined : me.accessLabel} />}
+        {tab === 'schedule' && isAdmin && <ScheduleReportPage />}
       </div>
-    </div>
+    </main>
   );
+}
+
+function App() {
+  return <AuthGate>{(me) => <Shell me={me} />}</AuthGate>;
 }
 
 export default App;

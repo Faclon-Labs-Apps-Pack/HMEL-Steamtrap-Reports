@@ -86,3 +86,13 @@ the report it feeds. All calls are made from the backend (`backend/src/services/
 - **Weekly** report = the **last completed week** (Mon→Sun), plus WTD/MTD/YTD columns in Performance Indicators.
 - **WTD** = trailing 7 days · **MTD** = since the 1st of the month · **YTD / Till Date** = cumulative since a **fixed 1-Sep-2026** (`MONITORING_START` in `dateRange.ts`) — data only exists from that date, so this replaced the Apr-Mar financial year.
 - All times render in **IST** (`REPORT_TIMEZONE`, default `Asia/Kolkata`).
+
+## Sub-user roles & session auth (added 2026-10-19)
+
+| API | Method | Host | Used by | Notes |
+|---|---|---|---|---|
+| `retrieve-sso-token/<ssoToken>` | GET | connector.iosense.io/api | `backend/src/api/adminApi.ts` (`POST /api/session/sso-exchange`) | SSO exchange moved server-side so the backend witnesses the verified token↔userId pairing (persisted in `logs/session-pairings.json` keyed by sha256(token)). Frontend `auth.ts` now calls our backend, not connector. |
+| `account/subuser/fetchRole/<page>/<pageSize>` | PUT | **appserver.iosense.io/api** | `backend/src/api/iosenseSubUser.ts` | Body `{"search":{}}`; NO userID anywhere — the service resolves the actor from the END USER's token (never the PAT). Paginate on `totalCount`. Validates the session + yields all roles with `subUsers[]` in one call. Cached 5 min per token hash. (Host/shape from a portal cURL capture 2026-10-19 — datads.iosense.io was wrong.) |
+| `account/subuser/child/<roleId>/<page>/<pageSize>` | PUT | appserver.iosense.io/api | `backend/src/api/iosenseSubUser.ts` | Sub-user name/email/active-status per role; paginate on `totalCount`. Non-fatal if it fails (identity display only). |
+
+Role → access mapping lives in `backend/src/api/access.ts` (unit tests: `src/tests/accessResolver.test.ts`): unit-level scoping from roleName ("HGU Read", "Petchem PPU - HDPE", "FCC PPU Edit" → Edit = Read), plant-level for "Refinery/Petchem Read", "All Read rights" → everything; a user in NO role's subUsers = main account = full admin access.

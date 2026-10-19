@@ -1,35 +1,32 @@
-const SSO_EXCHANGE_URL = 'https://connector.iosense.io/api/retrieve-sso-token';
-
 const TOKEN_KEY = 'bearer_token';
 const ORG_KEY = 'organisation';
 const USER_KEY = 'userId';
 
 interface SSOExchangeResponse {
-  success: boolean;
   token?: string;
   organisation?: string;
   userId?: string;
-  errors?: string[];
+  error?: string;
 }
 
 export class AuthError extends Error {}
 
+/**
+ * The one-time SSO token is exchanged THROUGH OUR BACKEND (not IOsense directly): the backend
+ * needs to witness IOsense's verified token↔userId pairing to enforce roles server-side — a
+ * client-claimed userId is never trusted (see backend/src/api/authMiddleware.ts).
+ */
 async function exchangeSSOToken(ssoToken: string): Promise<string> {
-  const response = await fetch(`${SSO_EXCHANGE_URL}/${ssoToken}`, {
-    method: 'GET',
-    headers: {
-      organisation: 'https://iosense.io',
-      'ngsw-bypass': 'true',
-      'Content-Type': 'application/json',
-    },
+  const response = await fetch('/api/session/sso-exchange', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ssoToken }),
   });
 
-  const data: SSOExchangeResponse = await response.json();
+  const data: SSOExchangeResponse = await response.json().catch(() => ({}));
 
-  if (!response.ok || !data.success || !data.token) {
-    throw new AuthError(
-      data.errors?.join(', ') || 'SSO token exchange failed. Please get a fresh link from the IOsense portal.',
-    );
+  if (!response.ok || !data.token) {
+    throw new AuthError(data.error || 'SSO token exchange failed. Please get a fresh link from the IOsense portal.');
   }
 
   localStorage.setItem(TOKEN_KEY, data.token);

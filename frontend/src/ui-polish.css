@@ -1,38 +1,363 @@
 /*
- * ui-polish.css — subtle, professional motion + interaction polish for the report-admin UI.
+ * ui-polish.css — the report-admin UI's visual system.
  *
- * Goal (client request 2026-09-30): make the UI friendlier with MINIMAL animation — gentle eases
- * and transitions only, nothing flashy. Design-sdk components keep their own built-in states; this
- * file only adds affordances to the hand-built controls (inputs, section cards, links) and a soft
- * entrance for panels/pages. All tokens have plain fallbacks, and every animation is disabled under
- * prefers-reduced-motion.
+ * Faclon brand revamp (client request 2026-10-19: "full modern UI revamp, seamless UX, vibrant
+ * design language"). Design language from the Faclon Labs design system: electric blue #1655F2
+ * with signal-lime #B4FF6B energy on deep navy #051320 and clean white; the navy→blue→lime
+ * "AI gradient" as the hero motif; Outfit for display type, Inter for data; crisp cards with
+ * accent stripes; fast, decisive motion (ease-out, no bounce). Design-sdk components are
+ * recolored through their own token scale (--global-chromatic-brand-*), not forked.
  */
 
 :root {
-  --ui-ease: cubic-bezier(0.4, 0, 0.2, 1);
-  --ui-dur: 180ms;
-  --ui-dur-slow: 220ms;
-  --ui-ring: var(--surface-brand-lightest, rgba(59, 110, 245, 0.16));
-  --ui-accent: var(--border-brand-default, #3b6ef5);
+  /* ---- Faclon palette ---- */
+  --f-blue: #1655f2;
+  --f-blue-600: #2f55d4;
+  --f-blue-700: #1e3fa8;
+  --f-blue-50: #eaf0fe;
+  --f-blue-100: #d5e0fd;
+  --f-lime: #b4ff6b;
+  --f-green: #3cc583;
+  --f-navy: #051320;
+  --f-navy-800: #0e1b2a;
+  --f-ink: #19283a;
+  --f-ink-700: #2f4255;
+  --f-slate: #64758d;
+  --f-slate-400: #7b8b9d;
+  --f-slate-300: #98a2b3;
+  --f-gray-50: #f7f9fc;
+  --f-gray-100: #eef1f5;
+  --f-gray-200: #dee3ea;
+  --f-tint-blue: #f1f5fb;
+  --f-success: #00a251;
+  --f-success-bg: #ecf9f2;
+  --f-warning: #c05717;
+  --f-warning-bg: #fff4ea;
+  --f-danger: #c3223b;
+  --f-danger-bg: #fdeef1;
+
+  --grad-ai: linear-gradient(90deg, #2f55d4 0%, #3cc583 100%);
+  --grad-ai-vivid: linear-gradient(90deg, #1655f2 0%, #50bea3 60%, #b4ff6b 100%);
+
+  --ui-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --ui-dur: 150ms;
+  --ui-dur-slow: 240ms;
+  --ui-ring: rgba(22, 85, 242, 0.18);
+  --ui-accent: var(--f-blue);
+  --ui-border: var(--f-gray-200);
+  --ui-text: var(--f-ink);
+  --ui-text-2: var(--f-slate);
+  --ui-text-3: var(--f-slate-300);
+  --ui-blue: var(--f-blue);
+  --ui-blue-bg: var(--f-blue-50);
+  --ui-green: var(--f-success);
+  --ui-green-bg: var(--f-success-bg);
+  --ui-amber: var(--f-warning);
+  --ui-amber-bg: var(--f-warning-bg);
+  --ui-red: var(--f-danger);
+  --ui-red-bg: var(--f-danger-bg);
+
+  --shadow-card: 0 1px 2px rgba(16, 36, 64, 0.05), 0 8px 24px rgba(16, 36, 64, 0.06);
+  --shadow-lift: 0 2px 6px rgba(16, 36, 64, 0.08), 0 12px 32px rgba(16, 36, 64, 0.1);
+  --shadow-brand: 0 6px 18px rgba(22, 85, 242, 0.32);
+
+  /* ---- Recolor the design-sdk to Faclon electric blue (its own token scale) ---- */
+  --global-chromatic-brand-50: #eaf0fe;
+  --global-chromatic-brand-100: #d5e0fd;
+  --global-chromatic-brand-200: #abc0fb;
+  --global-chromatic-brand-300: #6f90ff;
+  --global-chromatic-brand-400: #3d6bf6;
+  --global-chromatic-brand-500: #1655f2;
+  --global-chromatic-brand-600: #2f55d4;
+  --global-chromatic-brand-700: #1e3fa8;
+  --global-chromatic-brand-800: #16307d;
+  --global-chromatic-brand-900: #0e1f52;
 }
 
-/* ---- Form controls: smooth hover/focus feedback ---- */
+/* ---- Base ---- */
+body {
+  background: var(--f-gray-50);
+  color: var(--ui-text);
+  font-family: 'Inter', 'Inter Variable', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+/* =========================================================
+   HERO — deep-navy band with dotted grid, soft color glows
+   and the AI-gradient bar. The app's brand moment.
+   ========================================================= */
+.ui-hero {
+  position: relative;
+  background: var(--f-navy);
+  background-image:
+    radial-gradient(rgba(255, 255, 255, 0.055) 1px, transparent 1px);
+  background-size: 22px 22px;
+  overflow: hidden;
+}
+.ui-hero::before,
+.ui-hero::after {
+  content: '';
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(70px);
+  pointer-events: none;
+}
+.ui-hero::before {
+  width: 420px;
+  height: 420px;
+  right: -80px;
+  top: -220px;
+  background: rgba(22, 85, 242, 0.4);
+}
+.ui-hero::after {
+  width: 300px;
+  height: 300px;
+  right: 280px;
+  bottom: -200px;
+  background: rgba(180, 255, 107, 0.14);
+}
+.ui-hero-inner {
+  position: relative;
+  z-index: 1;
+  max-width: 1320px;
+  margin: 0 auto;
+  padding: 22px 24px 0;
+}
+.ui-hero-bar {
+  position: relative;
+  z-index: 1;
+  height: 3px;
+  background: var(--grad-ai-vivid);
+}
+
+.ui-breadcrumb {
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  color: var(--f-slate-400);
+  margin: 0 0 8px;
+}
+.ui-breadcrumb .sep { margin: 0 6px; opacity: 0.6; }
+.ui-breadcrumb .current { color: var(--f-slate-300); }
+
+.ui-app-header { margin-bottom: 18px; }
+.ui-app-header .ui-app-title {
+  margin: 0;
+  font-family: 'Outfit', 'Inter', sans-serif;
+  font-size: 30px;
+  line-height: 1.2;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  color: #fff;
+}
+.ui-app-header .ui-app-title .accent {
+  background: var(--grad-ai-vivid);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.ui-app-header .ui-app-subtitle {
+  margin: 6px 0 0;
+  font-size: 13.5px;
+  color: var(--f-slate-300);
+}
+
+/* ---- Tabs on the hero: quiet text, lime underline slides in on the active one ---- */
+.ui-tabs {
+  display: flex;
+  gap: 26px;
+  margin: 0;
+}
+.ui-tabs button {
+  appearance: none;
+  background: none;
+  border: 0;
+  padding: 10px 2px 14px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--f-slate-300);
+  cursor: pointer;
+  position: relative;
+  transition: color var(--ui-dur) var(--ui-ease);
+}
+.ui-tabs button:hover { color: #fff; }
+.ui-tabs button::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 100%;
+  bottom: 0;
+  height: 3px;
+  border-radius: 2px 2px 0 0;
+  background: var(--f-lime);
+  transition: right var(--ui-dur-slow) var(--ui-ease);
+}
+.ui-tabs button.is-active {
+  color: #fff;
+  font-weight: 600;
+}
+.ui-tabs button.is-active::after { right: 0; }
+.ui-tabs button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(180, 255, 107, 0.35);
+  border-radius: 6px;
+}
+
+/* ---- Session bar: who is signed in + role + logout ---- */
+.ui-session-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 2px 10px;
+}
+
+/* ---- Light tab bar (hero band removed 2026-10-19): brand-blue sliding underline ---- */
+.ui-tabs--light {
+  border-bottom: 1px solid var(--ui-border);
+  margin-bottom: 20px;
+}
+.ui-tabs--light button {
+  color: var(--ui-text-2);
+  padding: 8px 2px 12px;
+}
+.ui-tabs--light button:hover { color: var(--f-ink); }
+.ui-tabs--light button.is-active { color: var(--f-blue); }
+.ui-tabs--light button::after { background: var(--f-blue); }
+.ui-tabs--light button:focus-visible { box-shadow: 0 0 0 3px var(--ui-ring); }
+
+/* ---- Content area ---- */
+.ui-main {
+  max-width: 1320px;
+  margin: 0 auto;
+  padding: 20px 24px 56px;
+}
+.ui-panel {
+  background: #fff;
+  border: 1px solid var(--ui-border);
+  border-radius: 16px;
+  /* NO overflow clipping here — the design-sdk DatePicker popover renders in-flow inside the
+     panel and would be cut off (it was, 2026-10-19). Rounded corners still read fine because
+     inner content sits inside the panel's padding. */
+  box-shadow: var(--shadow-card);
+}
+
+/* ---- Page/section headers inside a tab ---- */
+.ui-page-head { padding: 22px 24px 0; }
+.ui-page-head h2 {
+  margin: 0;
+  font-family: 'Outfit', 'Inter', sans-serif;
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.ui-page-head .desc { margin: 3px 0 0; font-size: 13px; color: var(--ui-text-2); }
+.ui-page-head .note {
+  display: inline-block;
+  margin-top: 10px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--f-blue-600);
+  background: var(--f-blue-50);
+  border: 1px solid var(--f-blue-100);
+  border-radius: 999px;
+  padding: 4px 12px;
+}
+
+.ui-divider { border: 0; border-top: 1px solid var(--ui-border); margin: 20px 0 0; }
+
+/* =========================================================
+   Summary metrics — crisp stat tiles with a brand accent
+   stripe (the Faclon feature-tile motif), staggered entrance.
+   ========================================================= */
+.ui-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  padding: 18px 24px 4px;
+}
+.ui-metric {
+  flex: 1 1 150px;
+  max-width: 240px;
+  background: #fff;
+  border: 1px solid var(--ui-border);
+  border-radius: 12px;
+  padding: 12px 16px 12px 18px;
+  position: relative;
+  overflow: hidden;
+  animation: ui-rise var(--ui-dur-slow) var(--ui-ease) both;
+  transition: box-shadow var(--ui-dur) var(--ui-ease), transform var(--ui-dur) var(--ui-ease);
+}
+.ui-metric:nth-child(2) { animation-delay: 40ms; }
+.ui-metric:nth-child(3) { animation-delay: 80ms; }
+.ui-metric:nth-child(4) { animation-delay: 120ms; }
+.ui-metric:hover { box-shadow: var(--shadow-lift); transform: translateY(-2px); }
+.ui-metric::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--grad-ai);
+}
+.ui-metric .value {
+  font-family: 'Outfit', 'Inter', sans-serif;
+  font-size: 28px;
+  font-weight: 700;
+  line-height: 1.15;
+  font-variant-numeric: tabular-nums;
+  color: var(--f-ink);
+}
+.ui-metric .label {
+  font-size: 12px;
+  color: var(--ui-text-2);
+  margin-top: 2px;
+}
+.ui-metric.is-green::before { background: var(--f-success); }
+.ui-metric.is-green .value { color: var(--f-success); }
+.ui-metric.is-red::before { background: var(--f-danger); }
+.ui-metric.is-red .value { color: var(--f-danger); }
+.ui-metric.is-amber::before { background: var(--f-warning); }
+.ui-metric.is-amber .value { color: var(--f-warning); }
+
+/* ---- Compact filter toolbar ---- */
+.ui-toolbar {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 16px 24px;
+}
+.ui-field-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ui-text-2);
+  margin-bottom: 4px;
+}
+.ui-input {
+  padding: 7px 11px;
+  border: 1.5px solid var(--ui-border);
+  border-radius: 8px;
+  font: inherit;
+  font-size: 13.5px;
+  background: #fff;
+  color: var(--ui-text);
+}
+
+/* ---- Form controls: decisive hover/focus ---- */
 input[type='text'],
 input[type='datetime-local'],
 input[type='date'],
 input[type='time'],
 input[type='search'],
 textarea {
-  transition: border-color var(--ui-dur) var(--ui-ease), box-shadow var(--ui-dur) var(--ui-ease),
-    background-color var(--ui-dur) var(--ui-ease);
+  transition: border-color var(--ui-dur) var(--ui-ease), box-shadow var(--ui-dur) var(--ui-ease);
 }
 input[type='text']:hover,
 input[type='datetime-local']:hover,
 input[type='date']:hover,
 input[type='time']:hover,
-textarea:hover {
-  border-color: var(--ui-accent);
-}
+textarea:hover { border-color: var(--f-blue); }
 input[type='text']:focus,
 input[type='datetime-local']:focus,
 input[type='date']:focus,
@@ -40,109 +365,388 @@ input[type='time']:focus,
 input[type='search']:focus,
 textarea:focus {
   outline: none;
-  border-color: var(--ui-accent);
+  border-color: var(--f-blue);
   box-shadow: 0 0 0 3px var(--ui-ring);
 }
 
-/* ---- Checkboxes: brand accent + tiny press feedback ---- */
 input[type='checkbox'] {
   cursor: pointer;
-  accent-color: var(--surface-brand-default, #3b6ef5);
+  accent-color: var(--f-blue);
   transition: transform var(--ui-dur) var(--ui-ease);
 }
-input[type='checkbox']:active {
-  transform: scale(0.88);
+input[type='checkbox']:active { transform: scale(0.9); }
+
+a { color: var(--f-blue-600); transition: color var(--ui-dur) var(--ui-ease), opacity var(--ui-dur) var(--ui-ease); }
+a:hover { opacity: 0.8; }
+
+/* ---- Primary CTA: brand glow, press-down (Faclon hover/press rules) ---- */
+.fds-btn--variant-primary.fds-btn--color-primary {
+  box-shadow: var(--shadow-brand);
+  transition: box-shadow var(--ui-dur) var(--ui-ease), transform var(--ui-dur) var(--ui-ease),
+    background-color var(--ui-dur) var(--ui-ease);
+}
+.fds-btn--variant-primary.fds-btn--color-primary:active { transform: translateY(1px); box-shadow: 0 3px 10px rgba(22, 85, 242, 0.3); }
+.fds-btn { border-radius: 8px !important; }
+
+/* =========================================================
+   Generate tab — guided steps
+   ========================================================= */
+.ui-steps {
+  padding: 4px 24px 22px;
+  display: flex;
+  flex-direction: column;
+}
+.ui-step { padding: 18px 0 0; animation: ui-rise var(--ui-dur-slow) var(--ui-ease) both; }
+.ui-step + .ui-step { margin-top: 18px; border-top: 1px solid var(--ui-border); }
+.ui-step:nth-child(2) { animation-delay: 40ms; }
+.ui-step:nth-child(3) { animation-delay: 80ms; }
+.ui-step:nth-child(4) { animation-delay: 120ms; }
+.ui-step-label {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--f-ink);
+}
+.ui-step-label .hint { font-size: 12.5px; color: var(--ui-text-2); font-weight: 400; }
+.ui-step-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  font-size: 11.5px;
+  font-weight: 700;
+  color: #fff;
+  background: var(--grad-ai);
+  box-shadow: 0 2px 6px rgba(47, 85, 212, 0.35);
+  flex: none;
 }
 
-/* ---- Links: gentle fade on hover ---- */
-a {
-  transition: color var(--ui-dur) var(--ui-ease), opacity var(--ui-dur) var(--ui-ease);
+/* Segmented control (plant) — selected segment fills electric blue */
+.ui-seg {
+  display: inline-flex;
+  border: 1px solid var(--ui-border);
+  border-radius: 10px;
+  background: var(--f-gray-100);
+  padding: 3px;
+  gap: 3px;
 }
-a:hover {
-  opacity: 0.8;
+.ui-seg label {
+  position: relative;
+  padding: 7px 20px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ui-text-2);
+  border-radius: 7px;
+  cursor: pointer;
+  transition: background-color var(--ui-dur) var(--ui-ease), color var(--ui-dur) var(--ui-ease),
+    box-shadow var(--ui-dur) var(--ui-ease);
 }
+.ui-seg label:hover { color: var(--f-ink); }
+.ui-seg label.is-selected {
+  background: var(--f-blue);
+  color: #fff;
+  font-weight: 600;
+  box-shadow: 0 2px 8px rgba(22, 85, 242, 0.35);
+}
+.ui-seg input[type='radio'] {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  margin: 0;
+  cursor: pointer;
+}
+.ui-seg label:has(input:focus-visible) { box-shadow: 0 0 0 3px var(--ui-ring); }
 
-/* ---- Selectable "section" cards (Generate tab): lift + highlight on hover ---- */
+/* Section chips — selected = electric blue fill */
+.ui-chips { display: flex; flex-wrap: wrap; gap: 8px; }
 .ui-select-card {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 6px 16px;
+  border: 1.5px solid var(--ui-border);
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  background: #fff;
+  color: var(--f-ink-700);
   transition: border-color var(--ui-dur) var(--ui-ease), background-color var(--ui-dur) var(--ui-ease),
-    box-shadow var(--ui-dur) var(--ui-ease), transform var(--ui-dur) var(--ui-ease);
+    color var(--ui-dur) var(--ui-ease), transform var(--ui-dur) var(--ui-ease), box-shadow var(--ui-dur) var(--ui-ease);
 }
-.ui-select-card:hover {
-  border-color: var(--ui-accent);
-  box-shadow: 0 2px 10px rgba(16, 24, 40, 0.08);
-  transform: translateY(-1px);
+.ui-select-card:hover { border-color: var(--f-blue); transform: translateY(-1px); }
+.ui-select-card.is-selected {
+  border-color: var(--f-blue);
+  background: var(--f-blue);
+  color: #fff;
+  box-shadow: 0 2px 8px rgba(22, 85, 242, 0.3);
 }
-.ui-select-card:active {
-  transform: translateY(0);
+/* The checkbox stays for semantics/keyboard but is visually hidden — the blue fill IS the
+   checked state, and the label text sits dead-center in the chip. */
+.ui-select-card input[type='checkbox'] {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  margin: 0;
+  cursor: pointer;
 }
+.ui-select-card:has(input:focus-visible) { box-shadow: 0 0 0 3px var(--ui-ring); }
 
-/* ---- Soft entrance for panels that appear (results, editors, previews) ---- */
+/* ---- Motion ---- */
+@keyframes ui-rise {
+  from { opacity: 0; transform: translateY(7px); }
+  to { opacity: 1; transform: translateY(0); }
+}
 @keyframes ui-fade-in {
-  from {
-    opacity: 0;
-    transform: translateY(6px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+  from { opacity: 0; transform: translateY(5px); }
+  to { opacity: 1; transform: translateY(0); }
 }
-.ui-fade-in {
-  animation: ui-fade-in var(--ui-dur-slow) var(--ui-ease) both;
-}
+.ui-fade-in { animation: ui-fade-in var(--ui-dur-slow) var(--ui-ease) both; }
+.ui-page { animation: ui-rise var(--ui-dur-slow) var(--ui-ease) both; }
 
-/* ---- Tab page swap: a barely-there cross-fade so switching tabs feels smooth ---- */
-.ui-page {
-  animation: ui-fade-in var(--ui-dur-slow) var(--ui-ease) both;
+/* ---- Skeletons ---- */
+@keyframes ui-shimmer {
+  from { background-position: 100% 0; }
+  to { background-position: -100% 0; }
 }
+.ui-skel {
+  height: 13px;
+  border-radius: 6px;
+  background: linear-gradient(90deg, var(--f-gray-100) 25%, var(--f-gray-50) 50%, var(--f-gray-100) 75%);
+  background-size: 200% 100%;
+  animation: ui-shimmer 1.4s linear infinite;
+}
+.ui-skel-row { display: flex; gap: 24px; padding: 15px 24px; border-top: 1px solid var(--ui-border); }
 
-/* ---- Download icon button (report-log rows) ---- */
+/* ---- Download icon button ---- */
 .ui-download-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
-  border-radius: 6px;
-  color: var(--ui-accent);
-  border: 1px solid var(--border-neutral-default, #dcdfe4);
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  color: var(--f-blue);
+  border: 1.5px solid var(--ui-border);
   transition: background-color var(--ui-dur) var(--ui-ease), border-color var(--ui-dur) var(--ui-ease),
-    color var(--ui-dur) var(--ui-ease);
+    transform var(--ui-dur) var(--ui-ease);
 }
 .ui-download-btn:hover {
-  background: var(--ui-ring);
-  border-color: var(--ui-accent);
-  opacity: 1; /* override the generic a:hover fade — the background is the affordance here */
+  background: var(--f-blue-50);
+  border-color: var(--f-blue);
+  transform: translateY(-1px);
+  opacity: 1;
 }
 
-/* ---- Status badges ---- */
-/* The design-sdk Small badge ships with very tight padding (0 4px), so longer status words
-   ('generated', 'generation-failed') read cramped. Give them a touch more breathing room. */
-.fds-badge--size-small {
-  padding: 2px 8px !important;
-}
+/* ---- Badges: a touch more air ---- */
+.fds-badge--size-small { padding: 2px 8px !important; }
 
-/* ---- App header ---- */
-.ui-app-header {
+/* ---- Tables: tinted header band, hover wash ---- */
+.ui-table-wrap { overflow-x: auto; }
+.ui-table-wrap table { font-size: 13.5px; }
+.ui-table-wrap thead th, .ui-table-wrap thead td { background: var(--f-tint-blue) !important; }
+.ui-table-wrap tbody tr { transition: background-color var(--ui-dur) var(--ui-ease); }
+.ui-table-wrap tbody tr:hover td { background: var(--f-gray-50); }
+.ui-muted { color: var(--ui-text-2); }
+.ui-muted-3 { color: var(--ui-text-3); }
+
+/* ---- Upload drop zone ---- */
+.ui-dropzone {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  margin-bottom: var(--spacing-04, 12px);
+  align-items: center;
+  gap: 6px;
+  padding: 24px;
+  border: 1.5px dashed var(--f-gray-200);
+  border-radius: 10px;
+  color: var(--ui-text-2);
+  font-size: 13px;
+  text-align: center;
+  cursor: pointer;
+  background: var(--f-gray-50);
+  transition: border-color var(--ui-dur) var(--ui-ease), background-color var(--ui-dur) var(--ui-ease);
 }
-.ui-app-header .ui-app-title {
-  margin: 0;
+.ui-dropzone:hover,
+.ui-dropzone.is-over { border-color: var(--f-blue); background: var(--f-blue-50); color: var(--f-blue-600); }
+
+/* ---- Validation summary ---- */
+.ui-val-row { display: flex; gap: 28px; padding: 12px 0; }
+.ui-val { font-size: 12.5px; color: var(--ui-text-2); }
+.ui-val b {
+  display: block;
+  font-family: 'Outfit', 'Inter', sans-serif;
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--f-ink);
+  font-variant-numeric: tabular-nums;
 }
-.ui-app-header .ui-app-subtitle {
-  margin: 0;
-  color: var(--text-neutral-secondary, #667085);
+.ui-val.is-red b { color: var(--f-danger); }
+.ui-val.is-green b { color: var(--f-success); }
+
+/* ---- Inline alerts ---- */
+.ui-alert {
+  display: block;
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-size: 13px;
+  margin: 14px 24px 0;
+  border: 1px solid transparent;
+}
+.ui-alert.is-red { background: var(--f-danger-bg); color: var(--f-danger); border-color: rgba(195, 34, 59, 0.15); }
+.ui-alert.is-amber { background: var(--f-warning-bg); color: var(--f-warning); border-color: rgba(192, 87, 23, 0.15); }
+.ui-alert ul { margin: 6px 0 0; padding-left: 18px; }
+
+/* =========================================================
+   DatePicker popover — adaptive at every screen size.
+   The SDK positions the popover `fixed` with a computed inline
+   `top` that can go NEGATIVE (off-screen) when the trigger has
+   little room above/below (seen 2026-10-19). CSS cannot clamp an
+   inline value, so we take over: center it in the viewport and
+   cap it to the viewport, so it is fully visible on ANY screen.
+   ========================================================= */
+.fds-datepicker__popover {
+  top: 50% !important;
+  left: 50% !important;
+  right: auto !important;
+  bottom: auto !important;
+  transform: translate(-50%, -50%);
+  max-width: min(94vw, 560px);
+  max-height: min(92vh, 620px);
+  overflow: auto;
+  border-radius: 12px;
+  box-shadow: 0 10px 40px rgba(5, 19, 32, 0.25);
+  animation: ui-modal-in 260ms var(--ui-ease) both;
 }
 
-/* ---- Respect users who prefer no motion ---- */
+/* Modal behavior: dimmed backdrop behind the sheet (popover sits at z-index 500), with
+   mirrored enter/exit animations. The page component holds the popover mounted for the
+   duration of the exit animation via the `.is-closing` phase. */
+.ui-picker-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 499;
+  background: rgba(5, 19, 32, 0.38);
+  backdrop-filter: blur(2px);
+  animation: ui-backdrop-in 200ms var(--ui-ease) both;
+}
+.ui-picker.is-closing .fds-datepicker__popover,
+body:has(.ui-picker.is-closing) .fds-datepicker__popover {
+  animation: ui-modal-out 200ms cubic-bezier(0.55, 0, 0.8, 0.4) both;
+  pointer-events: none;
+}
+.ui-picker-backdrop.is-closing {
+  animation: ui-backdrop-out 200ms var(--ui-ease) both;
+}
+
+/* Origin-aware container transform: --picker-dx/--picker-dy (set from JS at open/close time)
+   are the trigger field's offset from the viewport center, so the sheet grows out of the
+   trigger and, on close, shrinks back into it. */
+@keyframes ui-modal-in {
+  from {
+    opacity: 0;
+    transform: translate(calc(-50% + var(--picker-dx, 0px)), calc(-50% + var(--picker-dy, 0px))) scale(0.1);
+  }
+  40% { opacity: 1; }
+  to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+}
+@keyframes ui-modal-out {
+  from { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  60% { opacity: 0.9; }
+  to {
+    opacity: 0;
+    transform: translate(calc(-50% + var(--picker-dx, 0px)), calc(-50% + var(--picker-dy, 0px))) scale(0.08);
+  }
+}
+@keyframes ui-backdrop-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes ui-backdrop-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+/* Tablet / small laptop: popover already fits via the caps above. */
+
+/* Phones & narrow screens: the preset sidebar would dominate the small sheet (and its own
+   internal list layout fights horizontal stacking), so hide it — the Start/End date + time
+   inputs and the calendar remain, which is the full capability. Panel takes the whole width. */
+@media (max-width: 620px) {
+  .fds-date-preset-sidebar { display: none !important; }
+  .fds-datepicker-popover__panel { width: 100% !important; min-width: 0 !important; box-sizing: border-box; }
+  .fds-datepicker__popover { max-width: min(94vw, 344px); }
+  .fds-datepicker-popover__inputs { width: 100% !important; box-sizing: border-box; padding-right: 14px; }
+  .fds-datepicker-popover__inputs input { min-width: 0; width: 100%; box-sizing: border-box; }
+}
+
+/* ---- Reduced motion ---- */
 @media (prefers-reduced-motion: reduce) {
   *,
   .ui-page,
-  .ui-fade-in {
+  .ui-fade-in,
+  .ui-step,
+  .ui-metric,
+  .ui-skel {
     animation: none !important;
     transition: none !important;
   }
+}
+
+/* ---- Responsive: tablet ---- */
+@media (max-width: 1024px) {
+  .ui-main { padding: 16px 16px 48px; }
+  .ui-page-head, .ui-toolbar, .ui-metrics, .ui-steps { padding-left: 18px; padding-right: 18px; }
+  .ui-metric .value { font-size: 24px; }
+}
+
+/* ---- Responsive: phone / narrow ---- */
+@media (max-width: 720px) {
+  .ui-main { padding: 12px 10px 40px; }
+  .ui-page-head, .ui-toolbar, .ui-metrics, .ui-steps { padding-left: 14px; padding-right: 14px; }
+  .ui-panel { border-radius: 12px; }
+  .ui-tabs { gap: 14px; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .ui-tabs button { white-space: nowrap; font-size: 13.5px; }
+
+  /* Metrics tiles: two per row */
+  .ui-metrics { gap: 10px; }
+  .ui-metric { flex: 1 1 calc(50% - 10px); max-width: none; }
+
+  /* Toolbar controls stack full-width for thumb reach */
+  .ui-toolbar { align-items: stretch; }
+  .ui-toolbar > div { width: 100%; }
+  .ui-toolbar .ui-input { width: 100%; box-sizing: border-box; min-width: 0 !important; }
+
+  /* Guided form: segmented control and chips stay tappable */
+  .ui-seg { width: 100%; }
+  .ui-seg label { flex: 1; text-align: center; padding: 8px 10px; }
+  .ui-select-card { padding: 8px 14px; }
+  .ui-step-label { gap: 7px; }
+  .ui-step-label > span[style] { margin-left: 0 !important; }
+
+  /* Page-head action rows (Schedule tab) wrap below the title */
+  .ui-page-head { flex-direction: column; }
+
+  /* Tables scroll horizontally inside the panel, never the page */
+  .ui-table-wrap { padding-left: 8px !important; padding-right: 8px !important; }
+
+  /* Skeletons mirror the tighter padding */
+  .ui-skel-row { padding: 13px 14px; gap: 14px; }
+}
+
+@media (max-width: 480px) {
+  .ui-metrics { gap: 8px; }
+  .ui-metric { flex: 1 1 calc(50% - 8px); padding: 10px 12px 10px 14px; }
+  .ui-metric .value { font-size: 21px; }
+  .ui-val-row { gap: 18px; }
+  .ui-page-head h2 { font-size: 17px; }
 }

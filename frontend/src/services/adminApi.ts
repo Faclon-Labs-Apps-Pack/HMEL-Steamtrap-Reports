@@ -17,6 +17,8 @@ export interface ReportLogEntry {
   rangeEnd?: string;
   /** True when the file still exists on disk and its download URL will work. */
   downloadable: boolean;
+  /** Short-lived signed download link minted by the backend (expires ~30 min; Refresh re-mints). */
+  downloadUrl?: string;
 }
 
 export interface Section {
@@ -65,22 +67,56 @@ export interface OverridesValidation {
   errors: OverrideError[];
 }
 
+/** The user's access level, derived server-side from their IOsense sub-user roles. */
+export type Access = { kind: 'admin' } | { kind: 'scoped'; sectionKeys: string[] };
+
+export interface Me {
+  userId: string;
+  name?: string;
+  email?: string;
+  roleNames: string[];
+  access: Access;
+  accessLabel: string;
+}
+
+/** Thrown when /api/me says the account has no report roles (HTTP 403 no-access). */
+export class NoAccessError extends Error {}
+
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, init);
+  const token = localStorage.getItem('bearer_token') ?? '';
+  const res = await fetch(url, {
+    ...init,
+    headers: {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(init?.headers ?? {}),
+    },
+  });
   const body = await res.json().catch(() => ({}));
+  if (res.status === 401) {
+    // Session rejected server-side — tell the AuthGate so the whole app flips to signed-out.
+    window.dispatchEvent(new CustomEvent('auth:expired', { detail: (body as { error?: string }).error }));
+  }
   if (!res.ok) {
-    throw new Error((body as { error?: string }).error ?? `${res.status} ${res.statusText}`);
+    const message = (body as { error?: string }).error ?? `${res.status} ${res.statusText}`;
+    if (res.status === 403 && (body as { code?: string }).code === 'no-access') throw new NoAccessError(message);
+    throw new Error(message);
   }
   return body as T;
 }
 
+export function fetchMe(): Promise<Me> {
+  return request('/api/me');
+}
+
 export function fetchReportLog(filters: {
   type?: string;
+  /** Drop one report type from the results — e.g. 'generated' for the scheduled-sends-only view. */
+  excludeType?: string;
   status?: string;
   section?: string;
   q?: string;
   limit?: number;
-}): Promise<{ total: number; entries: ReportLogEntry[] }> {
+}): Promise<{ total: number; counts: Record<string, number>; entries: ReportLogEntry[] }> {
   const params = new URLSearchParams();
   for (const [k, v] of Object.entries(filters)) {
     if (v !== undefined && v !== '') params.set(k, String(v));
@@ -98,8 +134,25 @@ export function generatedDownloadUrl(fileName: string): string {
 
 /** Correct download URL for a log row: on-demand reports come from /generated, emailed ones from /archive. */
 export function downloadUrlForEntry(entry: ReportLogEntry): string {
+  // The backend-minted signed URL is the authorized path; the plain paths remain only for the
+  // dev bypass (ADMIN_API_AUTH=off), where signatures aren't enforced.
+  if (entry.downloadUrl) return entry.downloadUrl;
   const isGenerated = entry.reportType === 'generated' || entry.status === 'generated';
   return isGenerated ? generatedDownloadUrl(entry.fileName!) : archiveDownloadUrl(entry.fileName!);
+}
+
+/** Overrides export needs the Authorization header, so it can't be a plain <a href> — fetch the
+ *  text and hand it to the browser as a Blob download. */
+export async function downloadOverridesExport(): Promise<void> {
+  const token = localStorage.getItem('bearer_token') ?? '';
+  const res = await fetch(overridesExportUrl, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+  if (!res.ok) throw new Error(`Export failed (${res.status}).`);
+  const blob = await res.blob();
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'report-overrides.txt';
+  a.click();
+  URL.revokeObjectURL(a.href);
 }
 
 export function fetchSections(): Promise<{ sections: Section[] }> {

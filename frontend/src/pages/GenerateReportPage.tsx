@@ -1,22 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Button } from '@faclon-labs/design-sdk/Button';
 import { Spinner } from '@faclon-labs/design-sdk/Spinner';
-import { Modal, ModalHeader, ModalBody, ModalFooter } from '@faclon-labs/design-sdk/Modal';
+import { DatePicker, type DateRange } from '@faclon-labs/design-sdk/DatePicker';
 import { fetchSections, startGeneration, fetchJob, type Section, type GenerateJob } from '../services/adminApi';
-import { FilterSelect, ReportLogTable } from './ViewReportsPage';
-
-/** yyyy-MM-ddTHH:mm for <input type="datetime-local">, in the browser's local time. */
-function toLocalInputValue(d: Date): string {
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
-const inputStyle: React.CSSProperties = {
-  padding: '8px 12px',
-  border: '1px solid var(--border-neutral-default, #ccc)',
-  borderRadius: 6,
-  font: 'inherit',
-};
+import { ReportLogTable } from './ViewReportsPage';
 
 /** Parent-plant order preferred in the picker; anything else follows, alphabetically. */
 function orderedCategories(sections: Section[]): string[] {
@@ -25,30 +13,69 @@ function orderedCategories(sections: Section[]): string[] {
   return [...preferred.filter((c) => present.includes(c)), ...present.filter((c) => !preferred.includes(c)).sort()];
 }
 
+/** Small numbered circle for the form's step labels. */
+function StepBadge({ n }: { n: number }) {
+  return <span className="ui-step-badge">{n}</span>;
+}
+
 /**
- * On-demand generation modal: pick a parent plant, then the child units under it, set the date/time
- * range, and generate. Each generated report is written to the shared log (see backend), so it
- * appears in the table below with a Download.
+ * The Generate Report tab. The form lives INLINE on the page (per client request 2026-10-19 — no
+ * modal): pick a plant (radio), pick its units (checkbox chips), set the range, and the Generate
+ * button sits below the form. Generated reports appear in the table underneath with a download.
  */
-function GenerateModal({ onClose, onGenerated }: { onClose: () => void; onGenerated: () => void }) {
+export function GenerateReportPage() {
   const [sections, setSections] = useState<Section[]>([]);
   const [sectionsError, setSectionsError] = useState<string | null>(null);
   const [parent, setParent] = useState('');
   const [childKeys, setChildKeys] = useState<Set<string>>(new Set());
-  const [start, setStart] = useState(() => {
-    const d = new Date();
-    d.setDate(d.getDate() - 1);
-    d.setHours(0, 0, 0, 0);
-    return toLocalInputValue(d);
-  });
-  const [end, setEnd] = useState(() => {
-    const d = new Date();
-    d.setHours(0, 0, 0, 0);
-    return toLocalInputValue(d);
+  // Default range: yesterday 00:00 -> today 00:00 (the last full day).
+  const [range, setRange] = useState<DateRange | null>(() => {
+    const end = new Date();
+    end.setHours(0, 0, 0, 0);
+    const start = new Date(end);
+    start.setDate(start.getDate() - 1);
+    return { start, end };
   });
   const [job, setJob] = useState<GenerateJob | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [reloadToken, setReloadToken] = useState(0);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // The date picker opens as a modal with origin-aware animations: it GROWS OUT of the trigger
+  // field and shrinks BACK INTO it on close. The trigger's offset from the viewport center is
+  // measured at open/close time (it may have scrolled between the two) and handed to the CSS
+  // keyframes as --picker-dx/--picker-dy — the popover is portaled to <body>, so the vars go on
+  // the root element. The SDK unmounts its popover the moment isOpen flips false, which would
+  // cut the exit animation — so closing is two-phase: flag `pickerClosing` (CSS plays the
+  // out-animation), THEN flip isOpen once it has finished.
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerClosing, setPickerClosing] = useState(false);
+  const pickerWrapRef = useRef<HTMLDivElement>(null);
+
+  const setPickerOrigin = () => {
+    const trigger = pickerWrapRef.current?.querySelector('.fds-date-trigger__field');
+    if (!trigger) return;
+    const r = trigger.getBoundingClientRect();
+    const root = document.documentElement.style;
+    root.setProperty('--picker-dx', `${r.x + r.width / 2 - window.innerWidth / 2}px`);
+    root.setProperty('--picker-dy', `${r.y + r.height / 2 - window.innerHeight / 2}px`);
+  };
+
+  const handlePickerOpenChange = (open: boolean) => {
+    if (open) {
+      setPickerOrigin();
+      setPickerClosing(false);
+      setPickerOpen(true);
+    } else if (!pickerClosing) {
+      setPickerOrigin();
+      setPickerClosing(true);
+      window.setTimeout(() => {
+        setPickerOpen(false);
+        setPickerClosing(false);
+      }, 210);
+    }
+  };
 
   useEffect(() => {
     fetchSections()
@@ -60,7 +87,6 @@ function GenerateModal({ onClose, onGenerated }: { onClose: () => void; onGenera
   }, []);
 
   const categories = orderedCategories(sections);
-  const parentOptions = [{ id: '', label: 'Select plant…' }, ...categories.map((c) => ({ id: c, label: c }))];
   const children = parent ? sections.filter((s) => s.category === parent) : [];
   const running = job?.status === 'running';
 
@@ -74,12 +100,14 @@ function GenerateModal({ onClose, onGenerated }: { onClose: () => void; onGenera
 
   async function handleGenerate() {
     setError(null);
+    setSuccessMsg(null);
     if (!parent) return setError('Select a plant first.');
     if (childKeys.size === 0) return setError('Select at least one unit.');
-    if (new Date(start) >= new Date(end)) return setError('Start must be before end.');
+    if (!range) return setError('Select a time range.');
+    if (range.start >= range.end) return setError('Start must be before end.');
     setJob(null);
     try {
-      const { jobId } = await startGeneration([...childKeys], new Date(start).toISOString(), new Date(end).toISOString());
+      const { jobId } = await startGeneration([...childKeys], range.start.toISOString(), range.end.toISOString());
       const poll = async () => {
         try {
           const j = await fetchJob(jobId);
@@ -90,8 +118,8 @@ function GenerateModal({ onClose, onGenerated }: { onClose: () => void; onGenera
               pollRef.current = null;
             }
             if (j.status === 'done') {
-              onGenerated();
-              onClose();
+              setSuccessMsg(`Generated ${j.files.length} report${j.files.length === 1 ? '' : 's'} — download below.`);
+              setReloadToken((n) => n + 1);
             } else if (j.status === 'failed') {
               setError(j.error ?? 'Generation failed.');
             }
@@ -108,130 +136,117 @@ function GenerateModal({ onClose, onGenerated }: { onClose: () => void; onGenera
   }
 
   return (
-    <Modal
-      isOpen
-      size="Medium"
-      onClose={onClose}
-      header={
-        <ModalHeader
-          title="Generate Report"
-          subtitle="Custom-range Analysis report (up to 31 days) — no email is sent."
-          onClose={onClose}
-        />
-      }
-      footer={
-        <ModalFooter
-          primaryAction={
-            <Button
-              variant="Primary"
-              isLoading={running}
-              label={running ? (job?.progressLabel ?? 'Generating…') : 'Generate'}
-              onClick={() => void handleGenerate()}
-            />
-          }
-          secondaryAction={<Button variant="Secondary" label="Cancel" onClick={onClose} />}
-        />
-      }
-    >
-      <ModalBody>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--spacing-05)' }}>
-          {sectionsError && <p className="BodySmallRegular" style={{ color: 'var(--text-error-default)' }}>{sectionsError}</p>}
-          {!sectionsError && sections.length === 0 && <Spinner label="Loading units…" />}
+    <div>
+      <div className="ui-page-head">
+        <h2>Generate Report</h2>
+        <p className="desc">
+          Build an on-demand steam trap analysis report for a selected plant, section, and time range.
+        </p>
+        <span className="note">On-demand reports are generated for review. No email is sent.</span>
+      </div>
 
-          {/* Step 1 — parent plant */}
-          <FilterSelect
-            label="Plant"
-            options={parentOptions}
-            value={parent}
-            onChange={(id) => {
-              setParent(id);
-              setChildKeys(new Set()); // reset children when the parent changes
-            }}
-          />
+      {/* --- Guided inline workflow: whitespace + dividers, no nested card --- */}
+      <div className="ui-steps">
+        {sectionsError && <p className="BodySmallRegular" style={{ color: 'var(--ui-red)', margin: '16px 0 0' }}>{sectionsError}</p>}
+        {!sectionsError && sections.length === 0 && (
+          <div style={{ padding: '16px 0 0' }}><Spinner label="Loading plants & units…" /></div>
+        )}
 
-          {/* Step 2 — child units of the chosen plant */}
-          {parent && (
-            <div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--spacing-03)', marginBottom: 'var(--spacing-02)' }}>
-                <span className="BodyMediumSemibold">Units in {parent}</span>
-                <span className="BodySmallRegular" style={{ color: 'var(--text-neutral-secondary, #667085)' }}>
-                  {childKeys.size === 0 ? 'none selected' : `${childKeys.size} selected`}
-                </span>
-                {childKeys.size > 0 && <Button variant="Gray" label="Clear" onClick={() => setChildKeys(new Set())} />}
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 'var(--spacing-02)' }}>
-                {children.map((s) => (
-                  <label
-                    key={s.key}
-                    className="BodySmallRegular ui-select-card"
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 8,
-                      padding: '6px 10px',
-                      border: '1px solid var(--border-neutral-default, #ddd)',
-                      borderRadius: 6,
-                      cursor: 'pointer',
-                      background: childKeys.has(s.key) ? 'var(--surface-brand-lightest, #eef4ff)' : undefined,
-                    }}
-                  >
-                    <input type="checkbox" checked={childKeys.has(s.key)} onChange={() => toggleChild(s.key)} />
-                    {s.name}
+        {sections.length > 0 && (
+          <>
+            {/* Step 1 — plant (segmented control over radio inputs) */}
+            <div className="ui-step">
+              <div className="ui-step-label"><StepBadge n={1} /> Select plant</div>
+              <div className="ui-seg" role="radiogroup" aria-label="Plant">
+                {categories.map((c) => (
+                  <label key={c} className={parent === c ? 'is-selected' : ''}>
+                    <input
+                      type="radio"
+                      name="plant"
+                      value={c}
+                      checked={parent === c}
+                      onChange={() => {
+                        setParent(c);
+                        setChildKeys(new Set()); // reset units when the plant changes
+                      }}
+                    />
+                    {c}
                   </label>
                 ))}
               </div>
             </div>
-          )}
 
-          {/* Step 3 — date & time range (editable) */}
-          <div style={{ display: 'flex', gap: 'var(--spacing-05)', flexWrap: 'wrap' }}>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--spacing-01)' }}>
-              <label className="BodySmallRegular" htmlFor="gv-start">Start (date &amp; time)</label>
-              <input id="gv-start" type="datetime-local" value={start} onChange={(e) => setStart(e.target.value)} style={inputStyle} />
+            {/* Step 2 — units of the chosen plant */}
+            {parent && (
+              <div className="ui-step ui-fade-in" key={parent}>
+                <div className="ui-step-label">
+                  <StepBadge n={2} /> Select sections in {parent}
+                  <span className="hint">
+                    {childKeys.size === 0 ? 'none selected' : `${childKeys.size} selected`}
+                  </span>
+                  <span style={{ display: 'inline-flex', gap: 8, marginLeft: 'auto' }}>
+                    <Button variant="Gray" size="XSmall" label="Select all" onClick={() => setChildKeys(new Set(children.map((s) => s.key)))} />
+                    {childKeys.size > 0 && <Button variant="Gray" size="XSmall" label="Clear selection" onClick={() => setChildKeys(new Set())} />}
+                  </span>
+                </div>
+                <div className="ui-chips">
+                  {children.map((s) => (
+                    <label key={s.key} className={`ui-select-card${childKeys.has(s.key) ? ' is-selected' : ''}`}>
+                      <input type="checkbox" checked={childKeys.has(s.key)} onChange={() => toggleChild(s.key)} />
+                      {s.name}
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Step 3 — date & time range (design-sdk range picker with HH:MM time inputs) */}
+            {parent && (
+              <div className="ui-step ui-fade-in">
+                <div className="ui-step-label"><StepBadge n={3} /> Select time range</div>
+                <div ref={pickerWrapRef} style={{ maxWidth: 360 }} className={`ui-picker${pickerClosing ? ' is-closing' : ''}`}>
+                  {/* Portaled to <body>: an animated ancestor's transform would otherwise trap
+                      this fixed-position backdrop inside the step (the SDK portals its popover
+                      the same way). */}
+                  {pickerOpen &&
+                    createPortal(
+                      <div className={`ui-picker-backdrop${pickerClosing ? ' is-closing' : ''}`} aria-hidden />,
+                      document.body,
+                    )}
+                  <DatePicker
+                    mode="range"
+                    showTime
+                    showPresets={false}
+                    showPresetChip={false}
+                    label="Reporting period"
+                    rangeValue={range}
+                    onRangeChange={setRange}
+                    isOpen={pickerOpen}
+                    onOpenChange={handlePickerOpenChange}
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Primary action below the form, with progress + result feedback */}
+            <div className="ui-step" style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+              <Button
+                variant="Primary"
+                isLoading={running}
+                label={running ? (job?.progressLabel ?? 'Generating…') : 'Generate Report'}
+                onClick={() => void handleGenerate()}
+              />
+              {error && <span className="BodySmallRegular" style={{ color: 'var(--ui-red)' }}>{error}</span>}
+              {successMsg && <span className="BodySmallRegular ui-fade-in" style={{ color: 'var(--ui-green)' }}>{successMsg}</span>}
             </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--spacing-01)' }}>
-              <label className="BodySmallRegular" htmlFor="gv-end">End (date &amp; time)</label>
-              <input id="gv-end" type="datetime-local" value={end} onChange={(e) => setEnd(e.target.value)} style={inputStyle} />
-            </div>
-          </div>
-
-          {running && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--spacing-03)' }}>
-              <Spinner />
-              <span className="BodySmallRegular">{job?.progressLabel}</span>
-            </div>
-          )}
-          {error && <p className="BodySmallRegular" style={{ color: 'var(--text-error-default)', margin: 0 }}>{error}</p>}
-        </div>
-      </ModalBody>
-    </Modal>
-  );
-}
-
-export function GenerateViewPage() {
-  const [modalOpen, setModalOpen] = useState(false);
-  const [reloadToken, setReloadToken] = useState(0);
-
-  return (
-    <div>
-      <div className="global-p-06" style={{ paddingBottom: 0, display: 'flex', alignItems: 'center', gap: 'var(--spacing-04)', flexWrap: 'wrap' }}>
-        <div style={{ flex: 1, minWidth: 240 }}>
-          <h1 className="HeadingSmallSemibold" style={{ margin: 0 }}>Reports</h1>
-          <p className="BodySmallRegular" style={{ color: 'var(--text-neutral-secondary, #667085)', margin: '2px 0 0' }}>
-            Generate an on-demand report, or browse the send log below.
-          </p>
-        </div>
-        <Button variant="Primary" label="Generate Report" onClick={() => setModalOpen(true)} />
+          </>
+        )}
       </div>
 
-      <ReportLogTable reloadToken={reloadToken} />
+      <hr className="ui-divider" style={{ margin: 0 }} />
 
-      {modalOpen && (
-        <GenerateModal
-          onClose={() => setModalOpen(false)}
-          onGenerated={() => setReloadToken((n) => n + 1)}
-        />
-      )}
+      {/* --- Generated reports (on-demand only) --- */}
+      <ReportLogTable mode="generated" reloadToken={reloadToken} />
     </div>
   );
 }

@@ -24,6 +24,10 @@ import { generateRangeAnalysisWorkbooks } from '../reportGeneration/generateRang
 import { saveWorkbook } from '../reportGeneration/saveWorkbook';
 import { derivePlantCategory } from '../lib/plantCategory';
 import { logReport } from '../scheduler/reportLog';
+import { createAuthMiddleware, requireAdmin, recordPairing, getSession, AUTH_ENABLED } from './authMiddleware';
+import { describeAccess, type KnownSection } from './access';
+import { mintDownloadPath, verifyDownload, type DownloadKind } from './signedDownloads';
+import { API_BASE } from '../config';
 
 /**
  * The admin UI's REST API (report send-log, schedule/recipient management via the overrides file,
@@ -235,8 +239,27 @@ function startGenerateJob(unitKeys: string[], start: Date, end: Date): GenerateJ
 // Router
 // ---------------------------------------------------------------------------
 
-async function downloadFrom(dir: string, rawName: string, res: express.Response): Promise<void> {
+/** All known sections with display name + plant category — feeds /sections, role scoping, and the auth middleware. */
+async function listKnownSections(): Promise<KnownSection[]> {
+  const names = await displayNamesByKey();
+  return dailyUnitKeysFromEnv().map((key) => {
+    const name = names.get(key) ?? key;
+    return { key, name, category: derivePlantCategory(name) };
+  });
+}
+
+/**
+ * Serves one permanent report copy. Downloads are plain <a> links (no Authorization header
+ * possible), so they are authorized by a short-lived HMAC signature minted into the JSON
+ * responses (see signedDownloads.ts) — and those responses are themselves role-scoped, so a
+ * scoped user can only ever hold signatures for their own sections' files.
+ */
+async function downloadFrom(kind: DownloadKind, dir: string, rawName: string, req: express.Request, res: express.Response): Promise<void> {
   const fileName = path.basename(rawName); // path-traversal guard
+  if (AUTH_ENABLED && !verifyDownload(kind, fileName, req.query.exp, req.query.sig)) {
+    res.status(403).json({ error: 'Download link expired — refresh the table and try again.' });
+    return;
+  }
   const filePath = path.join(dir, fileName);
   try {
     await stat(filePath);
@@ -256,12 +279,70 @@ export function createAdminApiRouter(): Router {
     res.json({ ok: true, time: new Date().toISOString() });
   });
 
+  // --- Pre-auth routes -------------------------------------------------------
+  // SSO exchange runs THROUGH the backend so IOsense itself hands us the verified
+  // token↔userId pairing (the browser token is opaque — we must never trust a client-claimed
+  // userId; see authMiddleware.ts).
+  router.post('/session/sso-exchange', async (req, res) => {
+    const ssoToken = typeof req.body?.ssoToken === 'string' ? req.body.ssoToken.trim() : '';
+    if (!ssoToken) {
+      res.status(400).json({ error: 'ssoToken is required.' });
+      return;
+    }
+    try {
+      const upstream = await fetch(`${API_BASE}/retrieve-sso-token/${encodeURIComponent(ssoToken)}`, {
+        headers: { organisation: 'https://iosense.io', 'ngsw-bypass': 'true', 'Content-Type': 'application/json' },
+        signal: AbortSignal.timeout(10_000),
+      });
+      const data = (await upstream.json().catch(() => null)) as
+        | { success?: boolean; token?: string; organisation?: string; userId?: string; errors?: string[] }
+        | null;
+      if (!upstream.ok || !data?.success || !data.token || !data.userId) {
+        res.status(401).json({ error: data?.errors?.join(', ') || 'SSO token exchange failed — get a fresh link from the IOsense portal.' });
+        return;
+      }
+      await recordPairing(data.token, data.userId, data.organisation);
+      res.json({ token: data.token, organisation: data.organisation, userId: data.userId });
+    } catch (err) {
+      res.status(503).json({ error: `IOsense unreachable during sign-in: ${err instanceof Error ? err.message : String(err)}` });
+    }
+  });
+
+  // Downloads authenticate by signed URL (minted into role-scoped responses), not by header.
+  router.get('/archive/:fileName', (req, res) => void downloadFrom('archive', ARCHIVE_DIR, req.params.fileName, req, res));
+  router.get('/generated/:fileName', (req, res) => void downloadFrom('generated', GENERATED_DIR, req.params.fileName, req, res));
+
+  // --- Everything below requires a valid IOsense session --------------------
+  router.use(createAuthMiddleware(listKnownSections));
+
+  router.get('/me', async (_req, res) => {
+    const session = getSession(res);
+    res.json({
+      userId: session.userId,
+      name: session.name,
+      email: session.email,
+      roleNames: session.roleNames,
+      access: session.access,
+      accessLabel: describeAccess(session.access, await listKnownSections()),
+    });
+  });
+
   // --- View Reports tab ---------------------------------------------------
   router.get('/report-log', async (req, res) => {
     try {
       let entries = await readReportLog();
-      const { type, status, section, q, from, to } = req.query as Record<string, string | undefined>;
+      // Role scoping FIRST, before any user-supplied filter: scoped users only ever see (and
+      // get counts for) their own sections' rows — user filters can narrow, never widen.
+      const access = getSession(res).access;
+      if (access.kind === 'scoped') {
+        const allowed = new Set(access.sectionKeys);
+        entries = entries.filter((e) => e.section && allowed.has(envKey(e.section)));
+      }
+      const { type, excludeType, status, section, q, from, to } = req.query as Record<string, string | undefined>;
       if (type) entries = entries.filter((e) => e.reportType === type);
+      // Lets the View Reports tab show only SCHEDULED sends (excludeType=generated) while the
+      // Generate tab shows only on-demand ones (type=generated) — same log, two views.
+      if (excludeType) entries = entries.filter((e) => e.reportType !== excludeType);
       if (status) entries = entries.filter((e) => e.status === status);
       if (section) entries = entries.filter((e) => e.section && envKey(e.section) === envKey(section));
       if (from) entries = entries.filter((e) => e.time >= new Date(from).toISOString());
@@ -275,6 +356,10 @@ export function createAdminApiRouter(): Router {
       entries.sort((a, b) => b.time.localeCompare(a.time));
       const limit = Math.min(Number(req.query.limit ?? 300), 2000);
       const total = entries.length;
+      // Real aggregate counts over the FULL filtered set (not just the returned page) — powers
+      // the summary metrics row in the UI. Never fabricated: same rows the table paginates.
+      const counts: Record<string, number> = {};
+      for (const e of entries) counts[e.status] = (counts[e.status] ?? 0) + 1;
       entries = entries.slice(0, limit);
 
       // Flag which files still exist on disk (downloadable) — one readdir per dir, not N stats.
@@ -294,28 +379,15 @@ export function createAdminApiRouter(): Router {
       const isGenerated = (e: LogEntry) => e.reportType === 'generated' || e.status === 'generated';
       res.json({
         total,
-        entries: entries.map((e) => ({
-          ...e,
-          downloadable: !!e.fileName && (isGenerated(e) ? generated.has(e.fileName) : archived.has(e.fileName)),
-        })),
-      });
-    } catch (err) {
-      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
-    }
-  });
-
-  router.get('/archive/:fileName', (req, res) => void downloadFrom(ARCHIVE_DIR, req.params.fileName, res));
-
-  // --- Generate Report tab --------------------------------------------------
-  router.get('/sections', async (_req, res) => {
-    try {
-      const names = await displayNamesByKey();
-      res.json({
-        // `category` is the parent plant (Refinery / Petchem) — drives the cascading parent→child
-        // section picker in the Generate modal.
-        sections: dailyUnitKeysFromEnv().map((key) => {
-          const name = names.get(key) ?? key;
-          return { key, name, category: derivePlantCategory(name) };
+        counts,
+        entries: entries.map((e) => {
+          const downloadable = !!e.fileName && (isGenerated(e) ? generated.has(e.fileName) : archived.has(e.fileName));
+          return {
+            ...e,
+            downloadable,
+            // Short-lived signed link — the only way a browser <a> can authorize a download.
+            downloadUrl: downloadable && e.fileName ? mintDownloadPath(isGenerated(e) ? 'generated' : 'archive', e.fileName) : undefined,
+          };
         }),
       });
     } catch (err) {
@@ -323,7 +395,24 @@ export function createAdminApiRouter(): Router {
     }
   });
 
-  router.post('/generate', (req, res) => {
+  // --- Generate Report tab --------------------------------------------------
+  router.get('/sections', async (_req, res) => {
+    try {
+      // `category` is the parent plant (Refinery / Petchem) — drives the cascading parent→child
+      // section picker in the Generate modal. Scoped users only see their own sections.
+      let sections = await listKnownSections();
+      const access = getSession(res).access;
+      if (access.kind === 'scoped') {
+        const allowed = new Set(access.sectionKeys);
+        sections = sections.filter((s) => allowed.has(s.key));
+      }
+      res.json({ sections });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  router.post('/generate', requireAdmin, (req, res) => {
     const { unitKeys, start, end } = req.body ?? {};
     if (!Array.isArray(unitKeys) || unitKeys.some((k) => typeof k !== 'string')) {
       res.status(400).json({ error: 'unitKeys must be an array of section keys (empty = all sections).' });
@@ -351,8 +440,8 @@ export function createAdminApiRouter(): Router {
     res.status(202).json({ jobId: job.id });
   });
 
-  router.get('/generate/:id', (req, res) => {
-    const job = jobs.get(req.params.id);
+  router.get('/generate/:id', requireAdmin, (req, res) => {
+    const job = jobs.get(String(req.params.id));
     if (!job) {
       res.status(404).json({ error: 'Unknown job (jobs do not survive a server restart — start a new one).' });
       return;
@@ -360,9 +449,9 @@ export function createAdminApiRouter(): Router {
     res.json(job);
   });
 
-  router.get('/generated/:fileName', (req, res) => void downloadFrom(GENERATED_DIR, req.params.fileName, res));
+  // --- Schedule Report tab (admin-only, including overrides import/export) ---
+  router.use(['/schedules', '/overrides'], requireAdmin);
 
-  // --- Schedule Report tab --------------------------------------------------
   router.get('/schedules', async (_req, res) => {
     try {
       const ov = await loadOverrides();

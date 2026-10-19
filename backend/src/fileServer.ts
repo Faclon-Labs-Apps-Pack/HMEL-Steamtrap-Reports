@@ -85,9 +85,21 @@ export function startFileServer(): ReturnType<express.Express['listen']> {
   app.use('/api', createAdminApiRouter());
 
   if (existsSync(FRONTEND_DIST_DIR)) {
-    app.use(express.static(FRONTEND_DIST_DIR));
+    // index.html must NEVER be cached (it references content-hashed bundles that vanish on each
+    // rebuild — a cached index means a blank white page); hashed assets may cache forever.
+    app.use(
+      express.static(FRONTEND_DIST_DIR, {
+        index: false,
+        setHeaders: (res, filePath) => {
+          if (filePath.includes(`${path.sep}assets${path.sep}`)) {
+            res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+          }
+        },
+      }),
+    );
     // SPA fallback: any other GET (a client-side route, a browser refresh, etc.) gets index.html.
     app.get(/^(?!\/report\/|\/api\/).*/, (_req, res) => {
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
       res.sendFile(path.join(FRONTEND_DIST_DIR, 'index.html'));
     });
     console.log(`[fileServer] Serving frontend build from ${FRONTEND_DIST_DIR}`);
