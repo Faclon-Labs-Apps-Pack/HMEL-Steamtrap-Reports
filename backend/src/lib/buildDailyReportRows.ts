@@ -122,7 +122,7 @@ export function buildDailyLiveStatusRows(
     const pt1 = liveTemperatures.pt1ByDevID.get(device.devID);
     const pt2 = liveTemperatures.pt2ByDevID.get(device.devID);
     const formatTemp = (value: number | string | undefined) =>
-      value !== undefined ? `${typeof value === 'number' ? Number(value.toFixed(2)) : value} °C` : 'N/A';
+      value !== undefined ? `${typeof value === 'number' ? Number(value.toFixed(3)) : value} °C` : 'N/A';
 
     return {
       id: device.devID,

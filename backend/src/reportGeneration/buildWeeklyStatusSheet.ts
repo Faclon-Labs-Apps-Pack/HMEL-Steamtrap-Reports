@@ -158,17 +158,17 @@ export function buildWeeklyStatusSheet(
     put(6, 8, m);
     put(9, 10, y);
   };
-  perfRow(7, 'Overall Trap Health', perf.wtd.trapHealthPct / 100, perf.mtd.trapHealthPct / 100, perf.ytd.trapHealthPct / 100, '0.0%');
+  perfRow(7, 'Overall Trap Health', perf.wtd.trapHealthPct / 100, perf.mtd.trapHealthPct / 100, perf.ytd.trapHealthPct / 100, '0.000%');
   // Rate of steam: a STATIC per-steam-type card (client-provided), shown verbatim. Display only —
   // not used to recompute any INR figure (see STEAM_RATE_CARD_TEXT).
   header(8, 1, 3, 'Rate of Steam (INR/MT)', 'left');
   sheet.getCell(8, 1).font = { bold: false };
   sheet.getCell(8, 1).fill = { type: 'pattern', pattern: 'none' };
   dataCell(8, 4, 10, STEAM_RATE_CARD_TEXT);
-  perfRow(9, 'Steam Loss (MT)', perf.wtd.steamLossMT, perf.mtd.steamLossMT, perf.ytd.steamLossMT, '0.00');
-  perfRow(10, 'Steam Savings (MT)', perf.wtd.steamSavingMT, perf.mtd.steamSavingMT, perf.ytd.steamSavingMT, '0.00');
-  perfRow(11, 'Loss (INR)', perf.wtd.steamLossMT * cost, perf.mtd.steamLossMT * cost, perf.ytd.steamLossMT * cost, '#,##0');
-  perfRow(12, 'Savings (INR)', perf.wtd.steamSavingMT * cost, perf.mtd.steamSavingMT * cost, perf.ytd.steamSavingMT * cost, '#,##0');
+  perfRow(9, 'Steam Loss (MT)', perf.wtd.steamLossMT, perf.mtd.steamLossMT, perf.ytd.steamLossMT, '0.000');
+  perfRow(10, 'Steam Savings (MT)', perf.wtd.steamSavingMT, perf.mtd.steamSavingMT, perf.ytd.steamSavingMT, '0.000');
+  perfRow(11, 'Loss (INR)', perf.wtd.steamLossMT * cost, perf.mtd.steamLossMT * cost, perf.ytd.steamLossMT * cost, '#,##0.000');
+  perfRow(12, 'Savings (INR)', perf.wtd.steamSavingMT * cost, perf.mtd.steamSavingMT * cost, perf.ytd.steamSavingMT * cost, '#,##0.000');
   box(perfHeaderRow, 12);
 
   // --- Steam Trap Status table.

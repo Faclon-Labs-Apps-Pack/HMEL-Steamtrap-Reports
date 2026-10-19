@@ -178,7 +178,7 @@ export function buildDailySummarySheet(
     // Real number (a fraction) + a percent number-format, NOT a "0.00%" string — so Excel treats
     // it as a number (no "number stored as text" warning) and it stays summable.
     pctCell.value = totalDevices > 0 ? statusCounts[group.label] / totalDevices : 0;
-    pctCell.numFmt = '0.00%';
+    pctCell.numFmt = '0.000%';
     pctCell.alignment = CENTER;
     row += 1;
   }
@@ -230,7 +230,7 @@ export function buildDailySummarySheet(
     row,
     'Overall Trap Health',
     [healthDTD, periods.wtd.trapHealthPct / 100, periods.mtd.trapHealthPct / 100, periods.ytd.trapHealthPct / 100],
-    '0.0%',
+    '0.000%',
   );
   row += 1;
   // Rate of steam: a STATIC per-steam-type card (client-provided), shown verbatim across all four
@@ -245,14 +245,14 @@ export function buildDailySummarySheet(
     row,
     'Steam Loss (MT)',
     [steamLossMT, periods.wtd.steamLossMT, periods.mtd.steamLossMT, periods.ytd.steamLossMT],
-    '0.00',
+    '0.000',
   );
   row += 1;
   fourColNum(
     row,
     'Steam Savings (MT)',
     [steamSavingMT, periods.wtd.steamSavingMT, periods.mtd.steamSavingMT, periods.ytd.steamSavingMT],
-    '0.00',
+    '0.000',
   );
   row += 1;
   const cost = HARDCODED_COST_OF_STEAM;
@@ -260,14 +260,14 @@ export function buildDailySummarySheet(
     row,
     'Loss (INR)',
     [steamLossMT * cost, periods.wtd.steamLossMT * cost, periods.mtd.steamLossMT * cost, periods.ytd.steamLossMT * cost],
-    '#,##0',
+    '#,##0.000',
   );
   row += 1;
   fourColNum(
     row,
     'Savings (INR)',
     [steamSavingMT * cost, periods.wtd.steamSavingMT * cost, periods.mtd.steamSavingMT * cost, periods.ytd.steamSavingMT * cost],
-    '#,##0',
+    '#,##0.000',
   );
   for (let r = perfHeaderRow; r <= row; r++) {
     for (let c = 1; c <= 5; c++) sheet.getCell(r, c).border = ALL_BORDERS;
