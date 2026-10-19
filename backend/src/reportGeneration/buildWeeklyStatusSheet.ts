@@ -4,6 +4,7 @@ import type { DateRange } from '../lib/dateRange';
 import { ALL_BORDERS, BLUE_HEADER_FILL, BOLD_FONT, CENTER, LEFT } from './xlsxStyles';
 import { HMEL_LOGO_WEEKLY_SIZE } from './hmelLogo';
 import { addLogoHeader } from './printLayout';
+import { STEAM_RATE_CARD_TEXT } from '../lib/steamRateCard';
 
 /** Hardcoded per explicit request — matches the "Rate of Steam" row shown in the client template. */
 const HARDCODED_COST_OF_STEAM = 2473;
@@ -158,12 +159,12 @@ export function buildWeeklyStatusSheet(
     put(9, 10, y);
   };
   perfRow(7, 'Overall Trap Health', perf.wtd.trapHealthPct / 100, perf.mtd.trapHealthPct / 100, perf.ytd.trapHealthPct / 100, '0.0%');
-  // Rate of steam: one constant value spanning all three windows.
+  // Rate of steam: a STATIC per-steam-type card (client-provided), shown verbatim. Display only —
+  // not used to recompute any INR figure (see STEAM_RATE_CARD_TEXT).
   header(8, 1, 3, 'Rate of Steam (INR/MT)', 'left');
   sheet.getCell(8, 1).font = { bold: false };
   sheet.getCell(8, 1).fill = { type: 'pattern', pattern: 'none' };
-  dataCell(8, 4, 10, cost);
-  sheet.getCell(8, 4).numFmt = '#,##0';
+  dataCell(8, 4, 10, STEAM_RATE_CARD_TEXT);
   perfRow(9, 'Steam Loss (MT)', perf.wtd.steamLossMT, perf.mtd.steamLossMT, perf.ytd.steamLossMT, '0.00');
   perfRow(10, 'Steam Savings (MT)', perf.wtd.steamSavingMT, perf.mtd.steamSavingMT, perf.ytd.steamSavingMT, '0.00');
   perfRow(11, 'Loss (INR)', perf.wtd.steamLossMT * cost, perf.mtd.steamLossMT * cost, perf.ytd.steamLossMT * cost, '#,##0');

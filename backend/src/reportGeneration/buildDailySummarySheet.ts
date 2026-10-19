@@ -5,6 +5,7 @@ import type { Device, LastDataPoint } from '../types/device';
 import { ALL_BORDERS, BLUE_HEADER_FILL, BOLD_FONT, CENTER, HEADER_FONT, LEFT } from './xlsxStyles';
 import { HMEL_LOGO_DAILY_SIZE } from './hmelLogo';
 import { addLogoHeader } from './printLayout';
+import { STEAM_RATE_CARD_TEXT } from '../lib/steamRateCard';
 
 /** Hardcoded per explicit request — not derived from device data. */
 const HARDCODED_COST_OF_STEAM = 2473;
@@ -232,12 +233,12 @@ export function buildDailySummarySheet(
     '0.0%',
   );
   row += 1;
-  // Rate of steam is a constant, shown once across all four windows.
+  // Rate of steam: a STATIC per-steam-type card (client-provided), shown verbatim across all four
+  // windows. Display only — not used to recompute any INR figure (see STEAM_RATE_CARD_TEXT).
   sheet.getCell(row, 1).value = 'Rate of Steam (INR/MT)';
   sheet.mergeCells(row, 2, row, 5);
   const rateCell = sheet.getCell(row, 2);
-  rateCell.value = HARDCODED_COST_OF_STEAM;
-  rateCell.numFmt = '#,##0';
+  rateCell.value = STEAM_RATE_CARD_TEXT;
   rateCell.alignment = CENTER;
   row += 1;
   fourColNum(
