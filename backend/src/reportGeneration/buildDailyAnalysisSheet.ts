@@ -91,8 +91,8 @@ export function buildDailyAnalysisSheet(sheet: Worksheet, rows: DailyAnalysisRow
       row.feedbackCount,
       toNumber(row.leakRate),
       toNumber(row.costOfSteam),
-      Number((row.steamSaving || 0).toFixed(3)),
-      Number((row.steamLoss || 0).toFixed(3)),
+      Number((row.steamSaving || 0).toFixed(2)),
+      Number((row.steamLoss || 0).toFixed(2)),
     ];
   });
 
