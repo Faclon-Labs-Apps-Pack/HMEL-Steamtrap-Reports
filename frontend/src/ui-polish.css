@@ -230,6 +230,33 @@ body {
   margin: 0 auto;
   padding: 20px 24px 56px;
 }
+
+/* Full-bleed variant (client request 2026-10-21): the app shell takes ALL the width and height
+   the screen (or portal iframe) gives it — no centered column, and the white panel stretches to
+   the bottom edge even when its content is short. */
+.ui-main--fill {
+  max-width: none;
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 100svh;
+  display: flex;
+  flex-direction: column;
+  padding: 14px 20px 20px;
+}
+.ui-main--fill > .ui-panel {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+}
+.ui-main--fill > .ui-panel > * { flex: 1 1 auto; }
+
+/* Wider screens get a touch more breathing room at the edges — content still spans fully. */
+@media (min-width: 1600px) {
+  .ui-main--fill { padding: 16px 32px 24px; }
+}
+@media (min-width: 2200px) {
+  .ui-main--fill { padding: 20px 48px 28px; }
+}
 .ui-panel {
   background: #fff;
   border: 1px solid var(--ui-border);

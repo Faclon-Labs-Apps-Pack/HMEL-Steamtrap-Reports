@@ -22,7 +22,7 @@ function Shell({ me }: { me: Me }) {
   const [tab, setTab] = useState<Tab>(isAdmin ? 'generate' : 'view-reports');
 
   return (
-    <main className="ui-main">
+    <main className="ui-main ui-main--fill">
       {/* Session bar removed per client request 2026-10-19 — SessionBar in AuthGate.tsx can be
           re-added here if identity/logout ever needs to be visible again. */}
       <nav className="ui-tabs ui-tabs--light" role="tablist" aria-label="Report sections">

@@ -113,6 +113,14 @@ async function resolveMember(userId: string, memberRoles: RoleEntry[]): Promise<
 /** How long an SSO sign-in stays valid before the user must come through the portal again. */
 const SESSION_TTL_MS = Number(process.env.SESSION_TTL_HOURS ?? '24') * 60 * 60_000;
 
+/**
+ * Sub-user role scoping switch (client decision 2026-10-21): for NOW every SSO sign-in gets the
+ * full report UI — in practice the portal link is used by the main account. Set SUBUSER_ROLES=on
+ * to re-enable per-role scoping (read users → View Reports of their sections only); all the
+ * machinery below stays in place for that.
+ */
+const ROLES_ENABLED = (process.env.SUBUSER_ROLES ?? 'off').trim().toLowerCase() === 'on';
+
 async function buildSession(token: string, sections: KnownSection[]): Promise<CacheEntry> {
   const map = await loadPairings();
   const pairing = map[tokenHash(token)];
@@ -124,6 +132,14 @@ async function buildSession(token: string, sections: KnownSection[]): Promise<Ca
   // per-request upstream validation isn't possible — a TTL bounds the session lifetime instead.
   if (Date.now() - new Date(pairing.at).getTime() > SESSION_TTL_MS) {
     return { error: 'unauthorized', message: 'Session expired — open this app again from the IOsense portal.', expiresAt: 0 };
+  }
+
+  // Role scoping disabled for now: a valid SSO sign-in = full access (main-account usage).
+  if (!ROLES_ENABLED) {
+    return {
+      value: { userId: pairing.userId, access: { kind: 'admin' }, roleNames: [] },
+      expiresAt: 0,
+    };
   }
 
   // Roles are read org-wide with the backend service token and matched to the SSO-verified

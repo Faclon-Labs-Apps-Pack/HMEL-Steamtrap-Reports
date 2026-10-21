@@ -55,20 +55,63 @@ export function clearAuth(): void {
  * on first load (then strips it from the URL), otherwise falls back to
  * whatever is already cached in localStorage.
  */
+const SSO_PARAM_NAMES = ['token', 'sso_token', 'ssoToken', 'ssotoken', 'access_token'];
+
+/** Finds the one-time SSO token wherever the portal put it: any known param name, in either the
+ *  query string or the hash fragment (some portal launchers append after the `#`). */
+function extractSsoToken(url: URL): { value: string; strip: () => void } | null {
+  for (const name of SSO_PARAM_NAMES) {
+    const v = url.searchParams.get(name);
+    if (v) {
+      return {
+        value: v,
+        strip: () => {
+          url.searchParams.delete(name);
+          window.history.replaceState({}, '', url.toString());
+        },
+      };
+    }
+  }
+  // Hash variants: "#/path?token=…" or "#token=…"
+  const hash = url.hash.startsWith('#') ? url.hash.slice(1) : url.hash;
+  const queryInHash = hash.includes('?') ? hash.slice(hash.indexOf('?') + 1) : hash;
+  const hashParams = new URLSearchParams(queryInHash);
+  for (const name of SSO_PARAM_NAMES) {
+    const v = hashParams.get(name);
+    if (v) {
+      return {
+        value: v,
+        strip: () => {
+          hashParams.delete(name);
+          const prefix = hash.includes('?') ? hash.slice(0, hash.indexOf('?')) : '';
+          const rest = hashParams.toString();
+          url.hash = prefix || rest ? `${prefix}${rest ? `?${rest}` : ''}` : '';
+          window.history.replaceState({}, '', url.toString());
+        },
+      };
+    }
+  }
+  return null;
+}
+
 export async function initAuth(): Promise<string> {
   const url = new URL(window.location.href);
-  const ssoToken = url.searchParams.get('token');
+  const sso = extractSsoToken(url);
 
-  if (ssoToken) {
-    const jwt = await exchangeSSOToken(ssoToken);
-    url.searchParams.delete('token');
-    window.history.replaceState({}, '', url.toString());
+  if (sso) {
+    const jwt = await exchangeSSOToken(sso.value);
+    sso.strip();
     return jwt;
   }
 
   const cached = getStoredToken();
   if (!cached) {
-    throw new AuthError('No SSO token in URL and no cached session. Open this app from the IOsense portal.');
+    // Name the params we DID receive — makes "the portal isn't passing a token" instantly
+    // visible in the error card instead of needing DevTools.
+    const seen = [...url.searchParams.keys()];
+    throw new AuthError(
+      `No SSO token in the URL and no cached session. Open this app from the IOsense portal.${seen.length ? ` (URL params received: ${seen.join(', ')})` : ' (no URL parameters received)'}`,
+    );
   }
   return cached;
 }
