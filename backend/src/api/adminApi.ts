@@ -301,6 +301,13 @@ export function createAdminApiRouter(): Router {
         res.status(401).json({ error: data?.errors?.join(', ') || 'SSO token exchange failed — get a fresh link from the IOsense portal.' });
         return;
       }
+      // Diagnostic (token redacted): shows EVERYTHING IOsense tells us about the signing-in user.
+      // Needed to see whether sub-user sessions carry their own id or the parent account's
+      // (observed 2026-10-21: repeated sign-ins all resolved to the master userId).
+      {
+        const { token: _t, ...rest } = data as Record<string, unknown>;
+        console.log('[sso-exchange] IOsense response (token redacted):', JSON.stringify(rest));
+      }
       await recordPairing(data.token, data.userId, data.organisation);
       res.json({ token: data.token, organisation: data.organisation, userId: data.userId });
     } catch (err) {
