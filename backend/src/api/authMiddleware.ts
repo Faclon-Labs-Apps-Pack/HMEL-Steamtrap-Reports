@@ -32,6 +32,8 @@ const PAIRING_CAP = 2000;
 interface Pairing {
   userId: string;
   organisation?: string;
+  /** Login email resolved at sign-in time (getSubUsers currentUser). */
+  email?: string;
   at: string;
 }
 
@@ -77,9 +79,9 @@ function savePairings(): Promise<void> {
 }
 
 /** Records a verified token↔user pairing (called by the /session/sso-exchange route). */
-export async function recordPairing(token: string, userId: string, organisation?: string): Promise<void> {
+export async function recordPairing(token: string, userId: string, organisation?: string, email?: string): Promise<void> {
   const map = await loadPairings();
-  map[tokenHash(token)] = { userId, organisation, at: new Date().toISOString() };
+  map[tokenHash(token)] = { userId, organisation, email, at: new Date().toISOString() };
   await savePairings().catch((err) => console.error('[auth] Could not persist session pairing:', err));
 }
 
@@ -149,10 +151,10 @@ async function buildSession(token: string, sections: KnownSection[]): Promise<Ca
     return { error: 'unauthorized', message: 'Session expired — open this app again from the IOsense portal.', expiresAt: 0 };
   }
 
-  // Role scoping disabled for now: a valid SSO sign-in = full access (main-account usage).
+  // Role scoping disabled: a valid SSO sign-in = full access (escape hatch, SUBUSER_ROLES=off).
   if (!ROLES_ENABLED) {
     return {
-      value: { userId: pairing.userId, access: { kind: 'admin' }, roleNames: [] },
+      value: { userId: pairing.userId, email: pairing.email, access: { kind: 'admin' }, roleNames: [] },
       expiresAt: 0,
     };
   }
@@ -183,7 +185,7 @@ async function buildSession(token: string, sections: KnownSection[]): Promise<Ca
       userId: pairing.userId,
       access,
       name: member?.name,
-      email: member?.email,
+      email: member?.email ?? pairing.email,
       roleNames: memberRoles.map((r) => r.roleName),
     },
     expiresAt: 0,

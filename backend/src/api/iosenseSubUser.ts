@@ -93,6 +93,58 @@ export interface RoleMember {
   active: boolean;
 }
 
+export interface ActingUser {
+  /** Login email of the person actually signed in (the endpoint's `currentUser`). */
+  email: string;
+  /** Their sub-user _id, resolved via the directory — null when they ARE the parent/master. */
+  subUserId: string | null;
+  /** True when currentUser is the parent/master account itself. */
+  isParent: boolean;
+}
+
+/**
+ * Resolves WHO is actually signed in. The SSO exchange only ever reports the parent account's
+ * userId (verified 2026-10-21), but `account/reportLogs2/getSubUsers` — callable WITH the
+ * exchanged session token — returns `currentUser` (the login email), `parentUser`, and the full
+ * sub-user email↔id directory. Identity comes from IOsense against the session token itself, so
+ * it is not client-spoofable. Returns null if the endpoint is unavailable (caller falls back).
+ */
+export async function resolveActingUser(sessionToken: string): Promise<ActingUser | null> {
+  for (const method of ['GET', 'PUT'] as const) {
+    try {
+      const res = await fetch(`${API_BASE}/account/reportLogs2/getSubUsers`, {
+        method,
+        headers: {
+          authorization: `Bearer ${sessionToken}`,
+          'content-type': 'application/json',
+          'ngsw-bypass': 'true',
+          origin: 'https://iosense.io',
+          referer: 'https://iosense.io/',
+        },
+        body: method === 'PUT' ? '{}' : undefined,
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (res.status === 404 || res.status === 405) continue; // wrong method — try the next
+      const json: any = await res.json().catch(() => null);
+      if (!res.ok || !json || json.success === false || typeof json.currentUser !== 'string') {
+        console.warn(`[identity] getSubUsers (${method}) unusable: ${res.status} ${json?.error ?? ''}`);
+        continue;
+      }
+      const email = json.currentUser.trim().toLowerCase();
+      const parentEmail = String(json.parentUser?.email ?? '').trim().toLowerCase();
+      const match = (json.data ?? []).find((u: any) => String(u.email ?? '').trim().toLowerCase() === email);
+      return {
+        email: json.currentUser,
+        subUserId: match ? String(match._id) : null,
+        isParent: email !== '' && email === parentEmail,
+      };
+    } catch (err) {
+      console.warn(`[identity] getSubUsers (${method}) failed: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+  return null;
+}
+
 /** Members of one role with name/email/status — paginated on totalCount. */
 export async function fetchRoleMembers(roleId: string): Promise<RoleMember[]> {
   const members: RoleMember[] = [];

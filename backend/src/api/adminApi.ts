@@ -25,6 +25,7 @@ import { saveWorkbook } from '../reportGeneration/saveWorkbook';
 import { derivePlantCategory } from '../lib/plantCategory';
 import { logReport } from '../scheduler/reportLog';
 import { createAuthMiddleware, requireAdmin, recordPairing, getSession, AUTH_ENABLED } from './authMiddleware';
+import { resolveActingUser } from './iosenseSubUser';
 import { describeAccess, type KnownSection } from './access';
 import { mintDownloadPath, verifyDownload, type DownloadKind } from './signedDownloads';
 import { API_BASE } from '../config';
@@ -301,14 +302,22 @@ export function createAdminApiRouter(): Router {
         res.status(401).json({ error: data?.errors?.join(', ') || 'SSO token exchange failed — get a fresh link from the IOsense portal.' });
         return;
       }
-      // Diagnostic (token redacted): shows EVERYTHING IOsense tells us about the signing-in user.
-      // Needed to see whether sub-user sessions carry their own id or the parent account's
-      // (observed 2026-10-21: repeated sign-ins all resolved to the master userId).
-      {
-        const { token: _t, ...rest } = data as Record<string, unknown>;
-        console.log('[sso-exchange] IOsense response (token redacted):', JSON.stringify(rest));
+      // The exchange reports the PARENT account's userId even for sub-user sessions (IOsense
+      // behavior, confirmed 2026-10-21) — resolve the ACTUAL person via getSubUsers, which the
+      // session token can call and which returns `currentUser` (their login email).
+      const acting = await resolveActingUser(data.token);
+      let effectiveUserId = data.userId;
+      if (acting) {
+        if (acting.subUserId && !acting.isParent) {
+          effectiveUserId = acting.subUserId;
+        } else if (!acting.isParent && !acting.subUserId) {
+          console.warn(`[sso-exchange] currentUser ${acting.email} not found in the sub-user directory — treating as main account.`);
+        }
+        console.log(`[sso-exchange] signed in: ${acting.email} (${acting.isParent ? 'parent/master' : acting.subUserId ? 'sub-user ' + acting.subUserId : 'unmatched'})`);
+      } else {
+        console.warn('[sso-exchange] getSubUsers unavailable — falling back to the exchange userId (parent).');
       }
-      await recordPairing(data.token, data.userId, data.organisation);
+      await recordPairing(data.token, effectiveUserId, data.organisation, acting?.email);
       res.json({ token: data.token, organisation: data.organisation, userId: data.userId });
     } catch (err) {
       res.status(503).json({ error: `IOsense unreachable during sign-in: ${err instanceof Error ? err.message : String(err)}` });
