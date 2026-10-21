@@ -117,16 +117,22 @@ export interface ActingUser {
 const IDENTITY_API_BASE = (process.env.IOSENSE_IDENTITY_API_BASE ?? 'https://appserver.iosense.io/api').replace(/\/$/, '');
 
 export async function resolveActingUser(sessionToken: string): Promise<ActingUser | null> {
-  for (const method of ['GET', 'PUT'] as const) {
+  // NOTE: the exchanged session token is sent RAW — the viewer's long-working appserver calls
+  // (trapReplacement) use `Authorization: <token>` with NO "Bearer " prefix; adding the prefix
+  // gets 401 (burned us 2026-10-21). A Bearer-prefixed variant is kept as a fallback.
+  const attempts: [string, string][] = [
+    ['GET', sessionToken],
+    ['PUT', sessionToken],
+    ['GET', `Bearer ${sessionToken}`],
+  ];
+  for (const [method, authHeader] of attempts) {
     try {
       const res = await fetch(`${IDENTITY_API_BASE}/account/reportLogs2/getSubUsers`, {
         method,
         headers: {
-          authorization: `Bearer ${sessionToken}`,
+          Authorization: authHeader,
           'content-type': 'application/json',
           'ngsw-bypass': 'true',
-          origin: 'https://iosense.io',
-          referer: 'https://iosense.io/',
         },
         body: method === 'PUT' ? '{}' : undefined,
         signal: AbortSignal.timeout(10_000),
@@ -134,7 +140,7 @@ export async function resolveActingUser(sessionToken: string): Promise<ActingUse
       if (res.status === 404 || res.status === 405) continue; // wrong method — try the next
       const json: any = await res.json().catch(() => null);
       if (!res.ok || !json || json.success === false || typeof json.currentUser !== 'string') {
-        console.warn(`[identity] getSubUsers (${method}) unusable: ${res.status} ${json?.error ?? ''}`);
+        console.warn(`[identity] getSubUsers (${method}${authHeader.startsWith('Bearer') ? '+Bearer' : ''}) unusable: ${res.status} ${JSON.stringify(json?.error ?? json?.errors ?? '').slice(0, 120)}`);
         continue;
       }
       const email = json.currentUser.trim().toLowerCase();
