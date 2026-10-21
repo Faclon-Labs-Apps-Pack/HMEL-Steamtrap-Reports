@@ -108,11 +108,18 @@ export interface ActingUser {
  * exchanged session token — returns `currentUser` (the login email), `parentUser`, and the full
  * sub-user email↔id directory. Identity comes from IOsense against the session token itself, so
  * it is not client-spoofable. Returns null if the endpoint is unavailable (caller falls back).
+ *
+ * Host: appserver (READ-ONLY GET — nothing on that server is created, modified, or deleted;
+ * the same host the daily reports have always read trapReplacement/feedback data from). The
+ * connector host rejects this token for the endpoint (401, verified); appserver accepts it —
+ * it is where the portal itself calls it.
  */
+const IDENTITY_API_BASE = (process.env.IOSENSE_IDENTITY_API_BASE ?? 'https://appserver.iosense.io/api').replace(/\/$/, '');
+
 export async function resolveActingUser(sessionToken: string): Promise<ActingUser | null> {
   for (const method of ['GET', 'PUT'] as const) {
     try {
-      const res = await fetch(`${API_BASE}/account/reportLogs2/getSubUsers`, {
+      const res = await fetch(`${IDENTITY_API_BASE}/account/reportLogs2/getSubUsers`, {
         method,
         headers: {
           authorization: `Bearer ${sessionToken}`,
