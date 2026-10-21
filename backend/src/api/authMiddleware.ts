@@ -36,30 +36,44 @@ interface Pairing {
 }
 
 let pairings: Record<string, Pairing> | null = null;
+// Single-flight load: concurrent first calls must share ONE parse — otherwise each gets its own
+// object and the last assignment silently drops the others' writes (bit us in testing 2026-10-21).
+let pairingsLoading: Promise<Record<string, Pairing>> | null = null;
 
 const tokenHash = (token: string) => createHash('sha256').update(token).digest('hex');
 
-async function loadPairings(): Promise<Record<string, Pairing>> {
-  if (pairings) return pairings;
-  try {
-    pairings = JSON.parse(await readFile(PAIRINGS_FILE, 'utf8'));
-  } catch {
-    pairings = {};
+function loadPairings(): Promise<Record<string, Pairing>> {
+  if (pairings) return Promise.resolve(pairings);
+  if (!pairingsLoading) {
+    pairingsLoading = readFile(PAIRINGS_FILE, 'utf8')
+      .then((raw) => JSON.parse(raw) as Record<string, Pairing>)
+      .catch(() => ({}))
+      .then((map) => {
+        pairings = map;
+        return map;
+      });
   }
-  return pairings!;
+  return pairingsLoading;
 }
 
-async function savePairings(): Promise<void> {
-  if (!pairings) return;
-  const entries = Object.entries(pairings);
-  if (entries.length > PAIRING_CAP) {
-    entries.sort((a, b) => (a[1].at < b[1].at ? -1 : 1));
-    pairings = Object.fromEntries(entries.slice(entries.length - PAIRING_CAP));
-  }
-  await mkdir(LOG_DIR, { recursive: true });
-  const tmp = `${PAIRINGS_FILE}.tmp-${process.pid}`;
-  await writeFile(tmp, JSON.stringify(pairings), 'utf8');
-  await rename(tmp, PAIRINGS_FILE);
+// Saves are chained so concurrent sign-ins can't interleave write+rename on the same temp file
+// (two simultaneous SSO exchanges did exactly that in testing, 2026-10-21).
+let saveChain: Promise<void> = Promise.resolve();
+
+function savePairings(): Promise<void> {
+  saveChain = saveChain.then(async () => {
+    if (!pairings) return;
+    const entries = Object.entries(pairings);
+    if (entries.length > PAIRING_CAP) {
+      entries.sort((a, b) => (a[1].at < b[1].at ? -1 : 1));
+      pairings = Object.fromEntries(entries.slice(entries.length - PAIRING_CAP));
+    }
+    await mkdir(LOG_DIR, { recursive: true });
+    const tmp = `${PAIRINGS_FILE}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    await writeFile(tmp, JSON.stringify(pairings), 'utf8');
+    await rename(tmp, PAIRINGS_FILE);
+  });
+  return saveChain;
 }
 
 /** Records a verified token↔user pairing (called by the /session/sso-exchange route). */
@@ -114,12 +128,13 @@ async function resolveMember(userId: string, memberRoles: RoleEntry[]): Promise<
 const SESSION_TTL_MS = Number(process.env.SESSION_TTL_HOURS ?? '24') * 60 * 60_000;
 
 /**
- * Sub-user role scoping switch (client decision 2026-10-21): for NOW every SSO sign-in gets the
- * full report UI — in practice the portal link is used by the main account. Set SUBUSER_ROLES=on
- * to re-enable per-role scoping (read users → View Reports of their sections only); all the
- * machinery below stays in place for that.
+ * Sub-user role scoping (client decision 2026-10-21, final model — ON by default):
+ *   • main account (in no role) and members of an admin role ("All acess") → full access;
+ *   • every other department role, Read or Edit alike → read-only View Reports scoped to the
+ *     role's sections.
+ * SUBUSER_ROLES=off reverts to "any SSO sign-in = full access" if ever needed.
  */
-const ROLES_ENABLED = (process.env.SUBUSER_ROLES ?? 'off').trim().toLowerCase() === 'on';
+const ROLES_ENABLED = (process.env.SUBUSER_ROLES ?? 'on').trim().toLowerCase() !== 'off';
 
 async function buildSession(token: string, sections: KnownSection[]): Promise<CacheEntry> {
   const map = await loadPairings();

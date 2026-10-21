@@ -119,6 +119,22 @@ function adminOverrideIds(): Set<string> {
   );
 }
 
+/**
+ * Role names whose members get FULL access (Generate + View + Schedule), exactly like the main
+ * account — client decision 2026-10-21: the org's "All acess" role (sic — matching is
+ * normalization-based, so the typo and any future respelling both work). Extend via env:
+ * ADMIN_ROLE_NAMES="All acess,Report Admin".
+ */
+function adminRoleNames(): Set<string> {
+  const names = (process.env.ADMIN_ROLE_NAMES ?? 'All acess,All access').split(',');
+  return new Set(names.map((n) => norm(n)).filter(Boolean));
+}
+
+/** True when this roleName grants full admin access. */
+export function isAdminRole(roleName: string): boolean {
+  return adminRoleNames().has(norm(roleName));
+}
+
 export interface DeriveResult {
   access: Access | null;
   /** The role entries this user belongs to (for display/logging). */
@@ -134,6 +150,13 @@ export function deriveAccess(userId: string, roles: RoleEntry[], sections: Known
     return { access: { kind: 'admin' }, memberRoles: [] };
   }
 
+  // Members of an admin role (e.g. "All acess") get full access, same as the main account.
+  if (memberRoles.some((r) => isAdminRole(r.roleName))) {
+    return { access: { kind: 'admin' }, memberRoles };
+  }
+
+  // Every other department role — Read OR Edit suffix alike — grants READ access to the
+  // sections named in the role (client decision 2026-10-21).
   const keys = new Set<string>();
   for (const role of memberRoles) {
     for (const k of resolveRoleSections(role.roleName, sections)) keys.add(k);

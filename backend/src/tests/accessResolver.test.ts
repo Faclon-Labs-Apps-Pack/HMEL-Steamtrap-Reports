@@ -58,10 +58,14 @@ for (const [roleName, expected] of CASES) {
 const roles = [
   { roleId: 'r1', roleName: 'Refinery Read', subUsers: ['u-read'] },
   { roleId: 'r2', roleName: 'test-subuser', subUsers: ['u-none'] },
+  { roleId: 'r3', roleName: 'All acess', subUsers: ['u-allaccess'] },
+  { roleId: 'r4', roleName: 'HGU Edit', subUsers: ['u-edit'] },
 ];
 const admin = deriveAccess('u-main', roles, SECTIONS);
 const read = deriveAccess('u-read', roles, SECTIONS);
 const none = deriveAccess('u-none', roles, SECTIONS);
+const allAccess = deriveAccess('u-allaccess', roles, SECTIONS);
+const editUser = deriveAccess('u-edit', roles, SECTIONS);
 const check = (label: string, ok: boolean) => {
   if (!ok) failures++;
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${label}`);
@@ -69,6 +73,8 @@ const check = (label: string, ok: boolean) => {
 check('main account -> admin', admin.access?.kind === 'admin');
 check('Refinery Read -> scoped 12 keys', read.access?.kind === 'scoped' && read.access.sectionKeys.length === REFINERY.length);
 check('role w/o units -> no access', none.access === null && none.memberRoles.length === 1);
+check('"All acess" member -> full admin', allAccess.access?.kind === 'admin' && allAccess.memberRoles.length === 1);
+check('Edit role -> READ access to its section', editUser.access?.kind === 'scoped' && editUser.access.sectionKeys.join() === 'HGU');
 
 console.log(failures === 0 ? '\nALL PASSED' : `\n${failures} FAILURES`);
 process.exit(failures === 0 ? 0 : 1);
