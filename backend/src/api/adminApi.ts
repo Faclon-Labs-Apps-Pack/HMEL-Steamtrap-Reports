@@ -352,7 +352,18 @@ export function createAdminApiRouter(): Router {
       const access = getSession(res).access;
       if (access.kind === 'scoped') {
         const allowed = new Set(access.sectionKeys);
-        entries = entries.filter((e) => e.section && allowed.has(envKey(e.section)));
+        // WEEKLY reports are logged under the PLANT name ('Refinery'/'Petchem'), not a unit key —
+        // show them only to users whose role covers that ENTIRE plant (e.g. "Refinery Read",
+        // "All Read rights"); a single-unit user doesn't see the plant-wide weekly workbook.
+        const sections = await listKnownSections();
+        const fullPlants = new Set(
+          [...new Set(sections.map((s) => s.category))].filter(
+            (cat) => cat !== 'Unassigned' && sections.filter((s) => s.category === cat).every((s) => allowed.has(s.key)),
+          ),
+        );
+        entries = entries.filter(
+          (e) => e.section && (allowed.has(envKey(e.section)) || fullPlants.has(e.section)),
+        );
       }
       const { type, excludeType, status, section, q, from, to } = req.query as Record<string, string | undefined>;
       if (type) entries = entries.filter((e) => e.reportType === type);
