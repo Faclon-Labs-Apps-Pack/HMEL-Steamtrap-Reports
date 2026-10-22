@@ -1,7 +1,7 @@
 import './setTimezone'; // MUST be first — pins the process to IST before any Date is created
 import path from 'node:path';
 import { stat } from 'node:fs/promises';
-import { OUTPUT_DIR, getDailyRecipientsForUnit, getReportBaseUrl } from './config';
+import { OUTPUT_DIR, getDailyRecipientsForUnit, getDailyCcForUnit, splitToAndCc, getReportBaseUrl } from './config';
 import { generateDailyReportWorkbooks } from './reportGeneration/generateDailyReport';
 import { saveWorkbook } from './reportGeneration/saveWorkbook';
 import { sendReportEmail } from './email/sendReportEmail';
@@ -26,13 +26,14 @@ async function main(): Promise<void> {
   for (const { unitName, reportName, fileName, workbook } of reports) {
     await saveWorkbook(workbook, OUTPUT_DIR, fileName);
 
-    const recipients = getDailyRecipientsForUnit(unitName);
-    if (recipients.length === 0) {
+    const configured = getDailyRecipientsForUnit(unitName);
+    if (configured.length === 0) {
       skipped++;
       await logReport({ reportType: 'daily', section: unitName, status: 'skipped', fileName, error: 'No recipients configured' });
       console.warn(`[resend] SKIP ${unitName} — no recipients`);
       continue;
     }
+    const { to: recipients, cc } = splitToAndCc(configured, getDailyCcForUnit(unitName));
 
     const downloadUrl = `${getReportBaseUrl()}/report/${encodeURIComponent(fileName)}`;
     try {
@@ -45,6 +46,7 @@ async function main(): Promise<void> {
     try {
       await sendReportEmail({
         to: recipients,
+        cc,
         subject: reportName,
         reportTitle: 'Steam Trap Daily Report',
         message:

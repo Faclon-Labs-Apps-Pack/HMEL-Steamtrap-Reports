@@ -9,6 +9,7 @@ import {
   envKey,
   getDailyRecipientsForUnit,
   getWeeklyRecipientsForCategory,
+  getDailyCcForUnit,
 } from '../config';
 import {
   loadOverrides,
@@ -18,6 +19,7 @@ import {
   writeOverridesText,
   isPaused,
   overrideRecipients,
+  overrideCc,
   type Overrides,
 } from '../scheduler/overrides';
 import { generateRangeAnalysisWorkbooks } from '../reportGeneration/generateRangeAnalysisReport';
@@ -107,6 +109,10 @@ interface ScheduleView {
   recipients: string[];
   /** True when the recipient list comes from report-overrides.txt rather than .env. */
   recipientsOverridden: boolean;
+  /** CC list (daily only; weekly reports have no CC). */
+  cc: string[];
+  /** True when the CC list comes from report-overrides.txt rather than .env. */
+  ccOverridden: boolean;
   lastRun?: { time: string; status: string; fileName?: string; error?: string };
 }
 
@@ -127,6 +133,7 @@ async function buildSchedules(ov: Overrides): Promise<ScheduleView[]> {
   for (const key of dailyUnitKeysFromEnv()) {
     const name = names.get(key) ?? key;
     const ovRecipients = overrideRecipients(ov, key, 'daily');
+    const ovCc = overrideCc(ov, key, 'daily');
     schedules.push({
       key,
       name,
@@ -135,6 +142,8 @@ async function buildSchedules(ov: Overrides): Promise<ScheduleView[]> {
       paused: isPaused(ov, key),
       recipients: ovRecipients ?? getDailyRecipientsForUnit(name),
       recipientsOverridden: ovRecipients !== null,
+      cc: ovCc ?? getDailyCcForUnit(name),
+      ccOverridden: ovCc !== null,
       lastRun: lastRunFor(key, 'daily'),
     });
   }
@@ -151,6 +160,8 @@ async function buildSchedules(ov: Overrides): Promise<ScheduleView[]> {
       paused: isPaused(ov, key),
       recipients: ovRecipients ?? getWeeklyRecipientsForCategory(category),
       recipientsOverridden: ovRecipients !== null,
+      cc: [], // weekly reports intentionally have no CC
+      ccOverridden: false,
       lastRun: lastRunFor(key, 'weekly'),
     });
   }
@@ -571,6 +582,38 @@ export function createAdminApiRouter(): Router {
     }
   });
 
+  // Set/clear a section's CC list (daily). null reverts to .env (DAILY_REPORT_CC + <UNIT>_DAILY_CC);
+  // an array (including []) sets an explicit override — [] means "no CC for this unit".
+  router.put('/schedules/:key/cc', async (req, res) => {
+    const { type, cc } = req.body ?? {};
+    if (type !== 'daily' && type !== 'weekly') {
+      res.status(400).json({ error: 'type must be "daily" or "weekly".' });
+      return;
+    }
+    if (cc !== null && (!Array.isArray(cc) || cc.some((r) => typeof r !== 'string'))) {
+      res.status(400).json({ error: 'cc must be an array of email addresses, or null to revert to .env.' });
+      return;
+    }
+    const overrideKey = `${envKey(req.params.key)}_${(type as string).toUpperCase()}_CC`;
+    try {
+      if (cc === null) {
+        await mutateOverrides((ov) => void ov.cc.delete(overrideKey));
+        res.json({ ok: true, reverted: true });
+        return;
+      }
+      const emails = (cc as string[]).map((s) => s.trim()).filter(Boolean);
+      const check = parseOverrides(`${overrideKey}: ${emails.join(', ')}`);
+      if (check.errors.length > 0) {
+        res.status(400).json({ error: check.errors[0].message });
+        return;
+      }
+      await mutateOverrides((ov) => void ov.cc.set(overrideKey, emails));
+      res.json({ ok: true, cc: emails });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
   // --- Overrides file: Notepad round-trip (export / validate / import) ------
   router.get('/overrides', async (_req, res) => {
     try {
@@ -581,6 +624,7 @@ export function createAdminApiRouter(): Router {
         pauseAll: parsed.pauseAll,
         pausedKeys: [...parsed.pausedKeys],
         recipients: Object.fromEntries(parsed.recipients),
+      cc: Object.fromEntries(parsed.cc),
         errors: parsed.errors,
       });
     } catch (err) {
@@ -603,6 +647,7 @@ export function createAdminApiRouter(): Router {
       pauseAll: parsed.pauseAll,
       pausedKeys: [...parsed.pausedKeys],
       recipients: Object.fromEntries(parsed.recipients),
+      cc: Object.fromEntries(parsed.cc),
       errors: parsed.errors,
     });
   });
@@ -621,6 +666,7 @@ export function createAdminApiRouter(): Router {
         pauseAll: parsed.pauseAll,
         pausedKeys: [...parsed.pausedKeys],
         recipients: Object.fromEntries(parsed.recipients),
+      cc: Object.fromEntries(parsed.cc),
         // Errors don't block the save (the scheduler ignores bad lines anyway) but are returned
         // so the UI can warn — the user may prefer to fix and re-upload.
         errors: parsed.errors,

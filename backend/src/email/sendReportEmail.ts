@@ -9,6 +9,8 @@ export interface EmailAttachment {
 
 export interface SendReportEmailParams {
   to: string[];
+  /** CC recipients (optional). */
+  cc?: string[];
   subject: string;
   reportTitle: string;
   message: string;
@@ -38,9 +40,11 @@ export async function sendReportEmail(params: SendReportEmailParams): Promise<vo
     throw new ApiError('No recipients configured for this report — refusing to send.');
   }
 
+  const cc = params.cc ?? [];
   console.log(
-    `[sendReportEmail] Sending "${params.subject}" to ${params.to.join(', ')} ` +
-      `(attachments: ${params.attachments.map((a) => a.fileName).join(', ')})`,
+    `[sendReportEmail] Sending "${params.subject}" to ${params.to.join(', ')}` +
+      (cc.length > 0 ? ` | cc: ${cc.join(', ')}` : '') +
+      ` (attachments: ${params.attachments.map((a) => a.fileName).join(', ')})`,
   );
 
   const response = await fetch(`${API_BASE}/account/sendEmail`, {
@@ -51,7 +55,7 @@ export async function sendReportEmail(params: SendReportEmailParams): Promise<vo
     },
     body: JSON.stringify({
       to: params.to,
-      cc: [],
+      cc,
       subject: params.subject,
       template: 'reports reportMail',
       attachments: params.attachments.map((a) => ({ url: a.url, method: 'GET', fileName: a.fileName })),

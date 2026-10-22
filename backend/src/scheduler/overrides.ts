@@ -33,15 +33,18 @@ export interface Overrides {
   pausedKeys: Set<string>;
   /** Full recipient-list replacements, keyed like the env vars: "CPP_575_DAILY_RECIPIENTS". */
   recipients: Map<string, string[]>;
+  /** Full CC-list replacements, keyed like the env vars: "CPP_575_DAILY_CC". */
+  cc: Map<string, string[]>;
   /** Malformed lines that were skipped (fail-open) — shown in the admin UI. */
   errors: OverrideError[];
 }
 
 export function emptyOverrides(): Overrides {
-  return { pauseAll: false, pausedKeys: new Set(), recipients: new Map(), errors: [] };
+  return { pauseAll: false, pausedKeys: new Set(), recipients: new Map(), cc: new Map(), errors: [] };
 }
 
 const RECIPIENTS_KEY_RE = /^[A-Z0-9_]+_(DAILY|WEEKLY)_RECIPIENTS$/;
+const CC_KEY_RE = /^[A-Z0-9_]+_(DAILY|WEEKLY)_CC$/;
 // Deliberately loose — corporate addresses vary; we only guard against obvious garbage.
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -89,10 +92,22 @@ export function parseOverrides(text: string): Overrides {
       continue;
     }
 
+    if (CC_KEY_RE.test(key)) {
+      // CC may legitimately be empty (= no CC for this section), unlike the primary recipient list.
+      const emails = value.split(',').map((s) => s.trim()).filter(Boolean);
+      const bad = emails.filter((e) => !EMAIL_RE.test(e));
+      if (bad.length > 0) {
+        result.errors.push({ line: i + 1, text: raw.trim(), message: `Not valid email address(es): ${bad.join(', ')} — line ignored.` });
+        continue;
+      }
+      result.cc.set(key, emails);
+      continue;
+    }
+
     result.errors.push({
       line: i + 1,
       text: raw.trim(),
-      message: `Unknown directive "${key}" — expected PAUSE or <SECTION>_DAILY_RECIPIENTS / <SECTION>_WEEKLY_RECIPIENTS. Line ignored.`,
+      message: `Unknown directive "${key}" — expected PAUSE or <SECTION>_DAILY_RECIPIENTS / <SECTION>_WEEKLY_RECIPIENTS / <SECTION>_DAILY_CC. Line ignored.`,
     });
   }
   return result;
@@ -133,6 +148,11 @@ export function overrideRecipients(ov: Overrides, sectionName: string, type: 'da
   return ov.recipients.get(`${envKey(sectionName)}_${type.toUpperCase()}_RECIPIENTS`) ?? null;
 }
 
+/** The override CC list for a section, or null to fall back to .env resolution (getDailyCcForUnit). */
+export function overrideCc(ov: Overrides, sectionName: string, type: 'daily' | 'weekly'): string[] | null {
+  return ov.cc.get(`${envKey(sectionName)}_${type.toUpperCase()}_CC`) ?? null;
+}
+
 const FILE_HEADER = `# HMEL report overrides — edit here or in the admin UI ("Schedule Report" tab).
 # Re-read on every scheduled run; changes apply from the NEXT run, no restart needed.
 # Malformed lines are IGNORED (reports fall back to .env) and flagged in the admin UI.
@@ -141,6 +161,7 @@ const FILE_HEADER = `# HMEL report overrides — edit here or in the admin UI ("
 #   PAUSE: CPP_575                              pause one section (env-key form)
 #   CPP_575_DAILY_RECIPIENTS: a@x.in, b@y.in    replace that section's daily recipients
 #   REFINERY_WEEKLY_RECIPIENTS: a@x.in          replace a weekly category's recipients
+#   CPP_575_DAILY_CC: mgr@x.in, mgr2@y.in       set that section's daily CC (blank = none)
 #
 # NOTE: structured edits from the UI rewrite this file — keep hand-written comments above this line only.
 `;
@@ -152,6 +173,9 @@ export function serializeOverrides(ov: Overrides): string {
   for (const key of [...ov.pausedKeys].sort()) lines.push(`PAUSE: ${key}`);
   if (ov.pauseAll || ov.pausedKeys.size > 0) lines.push('');
   for (const [key, emails] of [...ov.recipients.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+    lines.push(`${key}: ${emails.join(', ')}`);
+  }
+  for (const [key, emails] of [...ov.cc.entries()].sort(([a], [b]) => a.localeCompare(b))) {
     lines.push(`${key}: ${emails.join(', ')}`);
   }
   return lines.join('\n') + '\n';

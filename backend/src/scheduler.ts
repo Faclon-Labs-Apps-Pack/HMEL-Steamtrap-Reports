@@ -14,10 +14,12 @@ import {
   isStatsCacheEnabled,
   isDeliveryGuardEnabled,
   getDeliveryConfirmWaitMs,
+  getDailyCcForUnit,
+  splitToAndCc,
   OUTPUT_DIR,
   ARCHIVE_DIR,
 } from './config';
-import { loadOverrides, isPaused, overrideRecipients } from './scheduler/overrides';
+import { loadOverrides, isPaused, overrideRecipients, overrideCc } from './scheduler/overrides';
 import { startFileServer } from './fileServer';
 import { scheduleReport, longSetTimeout } from './scheduler/scheduleReport';
 import { addPendingEmail, removePendingEmail, getPendingEmails, type PendingEmail } from './scheduler/pendingEmails';
@@ -206,8 +208,8 @@ async function generateDaily(
       console.error(`[archive] Could not archive ${fileName} (send continues):`, err),
     );
 
-    const recipients = overrideRecipients(overrides, unitName, 'daily') ?? getDailyRecipientsForUnit(unitName);
-    if (recipients.length === 0) {
+    const configuredRecipients = overrideRecipients(overrides, unitName, 'daily') ?? getDailyRecipientsForUnit(unitName);
+    if (configuredRecipients.length === 0) {
       await logReport({
         reportType: 'daily',
         section: unitName,
@@ -217,6 +219,10 @@ async function generateDaily(
       });
       continue;
     }
+    // CC the common managers (shared DAILY_REPORT_CC + any unit-specific override) and move them out
+    // of the primary To list, so they're copied — not listed as a To on every department's report.
+    const configuredCc = overrideCc(overrides, unitName, 'daily') ?? getDailyCcForUnit(unitName);
+    const { to: recipients, cc } = splitToAndCc(configuredRecipients, configuredCc);
 
     const pending: PendingEmail = {
       reportType: 'daily',
@@ -224,6 +230,7 @@ async function generateDaily(
       fileName,
       downloadUrl: `${getReportBaseUrl()}/report/${encodeURIComponent(fileName)}`,
       recipients,
+      cc,
       subject: reportName,
       reportTitle: 'Steam Trap Daily Report',
       message:
@@ -283,6 +290,7 @@ function reportFileConsumed(fileName: string): boolean {
 async function emailReport(pending: PendingEmail): Promise<void> {
   await sendReportEmail({
     to: pending.recipients,
+    cc: pending.cc ?? [],
     subject: pending.subject,
     reportTitle: pending.reportTitle,
     message: pending.message,

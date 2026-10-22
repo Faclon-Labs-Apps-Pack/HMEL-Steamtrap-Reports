@@ -36,6 +36,9 @@ export interface Schedule {
   paused: boolean;
   recipients: string[];
   recipientsOverridden: boolean;
+  /** CC recipients (daily only; weekly reports have no CC). */
+  cc: string[];
+  ccOverridden: boolean;
   lastRun?: { time: string; status: string; fileName?: string; error?: string };
 }
 
@@ -64,6 +67,7 @@ export interface OverridesValidation {
   pauseAll: boolean;
   pausedKeys: string[];
   recipients: Record<string, string[]>;
+  cc?: Record<string, string[]>;
   errors: OverrideError[];
 }
 
@@ -196,6 +200,15 @@ export function saveRecipients(key: string, type: 'daily' | 'weekly', recipients
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ type, recipients }),
+  });
+}
+
+/** Set a section's CC list (array, [] = none), or null to revert to the .env default. */
+export function saveCc(key: string, type: 'daily' | 'weekly', cc: string[] | null): Promise<{ ok: boolean }> {
+  return request(`/api/schedules/${encodeURIComponent(key)}/cc`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type, cc }),
   });
 }
 

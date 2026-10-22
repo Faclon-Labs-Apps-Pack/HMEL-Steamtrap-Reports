@@ -126,6 +126,38 @@ export function getDailyRecipientsForUnit(unitName: string): string[] {
   return parseRecipients('DAILY_REPORT_RECIPIENTS');
 }
 
+/**
+ * CC list for ONE unit's Daily Report. CC is for addresses that should be copied on every
+ * department's report (e.g. common managers) rather than listed as a primary (To) recipient on each
+ * unit. Resolved as the shared DAILY_REPORT_CC plus any unit-specific <UNITKEY>_DAILY_CC, deduped.
+ * (Weekly reports intentionally have no CC — their recipients are the managers themselves.)
+ */
+export function getDailyCcForUnit(unitName: string): string[] {
+  const key = envKey(unitName);
+  const shared = parseRecipients('DAILY_REPORT_CC');
+  const own = parseRecipients(`${key}_DAILY_CC`);
+  const seen = new Set<string>();
+  return [...shared, ...own].filter((e) => {
+    const k = e.toLowerCase();
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+}
+
+/**
+ * Splits a resolved recipient list + CC list into the final To/CC actually sent, so an address that
+ * belongs in CC (a common manager) is never ALSO a primary To recipient. Safeguard: if removing the
+ * CC addresses would leave an empty To, keep the original list as To and drop CC — a report must
+ * never go out with no primary recipient.
+ */
+export function splitToAndCc(recipients: string[], cc: string[]): { to: string[]; cc: string[] } {
+  const ccKeys = new Set(cc.map((e) => e.toLowerCase()));
+  const to = recipients.filter((r) => !ccKeys.has(r.toLowerCase()));
+  if (to.length === 0) return { to: recipients, cc: [] };
+  return { to, cc };
+}
+
 /** One section's own schedule: which key it covers, when it fires, and who receives it. */
 export interface SectionSchedule {
   key: string; // envKey form, e.g. CPP_575 or REFINERY

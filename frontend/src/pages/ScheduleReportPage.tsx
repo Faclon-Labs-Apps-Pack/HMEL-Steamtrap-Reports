@@ -20,6 +20,7 @@ import {
   pauseSection,
   resumeSection,
   saveRecipients,
+  saveCc,
   validateOverrides,
   saveOverrides,
   downloadOverridesExport,
@@ -62,20 +63,39 @@ function RecipientsModal({
   onClose: () => void;
 }) {
   const [text, setText] = useState(row.recipients.join('\n'));
+  const [ccText, setCcText] = useState((row.cc ?? []).join('\n'));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const isDaily = row.type === 'daily'; // CC applies to daily reports only
 
   const parsed = text.split(/[\n,]/).map((s) => s.trim()).filter(Boolean);
+  const parsedCc = ccText.split(/[\n,]/).map((s) => s.trim()).filter(Boolean);
   const duplicates = [...new Set(parsed.filter((e, i) => parsed.findIndex((x) => x.toLowerCase() === e.toLowerCase()) !== i))];
 
-  async function save(recipients: string[] | null) {
+  /** Saves To and (for daily) CC together. */
+  async function save(recipients: string[], cc: string[]) {
     setSaving(true);
     setError(null);
     try {
       await saveRecipients(row.key, row.type, recipients);
+      if (isDaily) await saveCc(row.key, row.type, cc);
       onSaved();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unable to save recipient changes.');
+      setError(err instanceof Error ? err.message : 'Unable to save changes.');
+      setSaving(false);
+    }
+  }
+
+  /** Reverts To and/or CC back to the .env defaults (null = revert). */
+  async function revert(which: 'recipients' | 'cc') {
+    setSaving(true);
+    setError(null);
+    try {
+      if (which === 'recipients') await saveRecipients(row.key, row.type, null);
+      else await saveCc(row.key, row.type, null);
+      onSaved();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to revert.');
       setSaving(false);
     }
   }
@@ -88,7 +108,7 @@ function RecipientsModal({
       header={
         <ModalHeader
           title={`Edit recipients — ${row.name}`}
-          subtitle={`${row.type === 'daily' ? 'Daily' : 'Weekly'} report · currently ${row.recipients.length} recipient${row.recipients.length === 1 ? '' : 's'}${row.recipientsOverridden ? ' (overridden)' : ''}`}
+          subtitle={`${row.type === 'daily' ? 'Daily' : 'Weekly'} report · ${row.recipients.length} To${isDaily ? ` · ${parsedCc.length} Cc` : ''}${row.recipientsOverridden ? ' · To overridden' : ''}`}
           onClose={onClose}
         />
       }
@@ -99,8 +119,8 @@ function RecipientsModal({
               variant="Primary"
               isLoading={saving}
               isDisabled={parsed.length === 0}
-              label={`Save ${parsed.length} recipient${parsed.length === 1 ? '' : 's'}`}
-              onClick={() => void save(parsed)}
+              label={isDaily ? `Save ${parsed.length} To · ${parsedCc.length} Cc` : `Save ${parsed.length} recipient${parsed.length === 1 ? '' : 's'}`}
+              onClick={() => void save(parsed, parsedCc)}
             />
           }
           secondaryAction={<Button variant="Secondary" label="Cancel" onClick={onClose} />}
@@ -110,16 +130,43 @@ function RecipientsModal({
       <ModalBody>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div>
-            <label className="ui-field-label" htmlFor="rcpt-edit">Email addresses — one per line, or comma separated</label>
+            <label className="ui-field-label" htmlFor="rcpt-edit">To — one per line, or comma separated</label>
             <textarea
               id="rcpt-edit"
               value={text}
               onChange={(e) => setText(e.target.value)}
-              rows={Math.min(12, Math.max(5, parsed.length + 1))}
+              rows={Math.min(12, Math.max(4, parsed.length + 1))}
               style={{ width: '100%', font: 'inherit', fontSize: 13.5, padding: 10, border: '1px solid var(--ui-border)', borderRadius: 7, boxSizing: 'border-box' }}
               placeholder={'a@hmel.in\nb@hmel.in'}
             />
+            {row.recipientsOverridden && (
+              <div style={{ marginTop: 6 }}>
+                <Button variant="Gray" size="XSmall" label="Revert To to .env" onClick={() => void revert('recipients')} />
+              </div>
+            )}
           </div>
+          {isDaily && (
+            <div>
+              <label className="ui-field-label" htmlFor="cc-edit">Cc — copied on this report (one per line, or comma separated)</label>
+              <textarea
+                id="cc-edit"
+                value={ccText}
+                onChange={(e) => setCcText(e.target.value)}
+                rows={Math.min(10, Math.max(3, parsedCc.length + 1))}
+                style={{ width: '100%', font: 'inherit', fontSize: 13.5, padding: 10, border: '1px solid var(--ui-border)', borderRadius: 7, boxSizing: 'border-box' }}
+                placeholder={'manager@hmel.in'}
+              />
+              <p className="BodySmallRegular ui-muted" style={{ margin: '6px 0 0' }}>
+                Common managers typically go here so they're copied on every unit rather than listed as a To.
+                Leave blank for no Cc. Anyone also in To is kept as To only.
+              </p>
+              {row.ccOverridden && (
+                <div style={{ marginTop: 6 }}>
+                  <Button variant="Gray" size="XSmall" label="Revert Cc to .env" onClick={() => void revert('cc')} />
+                </div>
+              )}
+            </div>
+          )}
           {duplicates.length > 0 && (
             <p className="BodySmallRegular" style={{ color: 'var(--ui-amber)', margin: 0 }}>
               Duplicate entries: {duplicates.join(', ')} — only one copy will be kept by the mail system.
@@ -129,11 +176,6 @@ function RecipientsModal({
             Changes are saved to the runtime overrides file (never .env) and take effect from the
             next scheduled run — no restart needed.
           </p>
-          {row.recipientsOverridden && (
-            <div>
-              <Button variant="Gray" size="XSmall" label="Revert to .env list" onClick={() => void save(null)} />
-            </div>
-          )}
           {error && <p className="BodySmallRegular" style={{ color: 'var(--ui-red)', margin: 0 }}>{error}</p>}
         </div>
       </ModalBody>
@@ -232,7 +274,10 @@ function ImportModal({ onApplied, onClose }: { onApplied: () => void; onClose: (
   }
 
   const validCount = pending
-    ? (pending.preview.pauseAll ? 1 : 0) + pending.preview.pausedKeys.length + Object.keys(pending.preview.recipients).length
+    ? (pending.preview.pauseAll ? 1 : 0) +
+      pending.preview.pausedKeys.length +
+      Object.keys(pending.preview.recipients).length +
+      Object.keys(pending.preview.cc ?? {}).length
     : 0;
 
   return (
@@ -352,6 +397,12 @@ function ImportModal({ onApplied, onClose }: { onApplied: () => void; onClose: (
                   <span className="ui-muted">Recipient overrides: </span>
                   {Object.keys(pending.preview.recipients).length > 0
                     ? Object.entries(pending.preview.recipients).map(([k, v]) => `${k} (${v.length})`).join('; ')
+                    : 'none'}
+                </div>
+                <div>
+                  <span className="ui-muted">CC overrides: </span>
+                  {Object.keys(pending.preview.cc ?? {}).length > 0
+                    ? Object.entries(pending.preview.cc ?? {}).map(([k, v]) => `${k} (${v.length})`).join('; ')
                     : 'none'}
                 </div>
               </div>
@@ -538,8 +589,9 @@ export function ScheduleReportPage() {
                         />
                       </TableCell>
                       <TableCell contentType="text">
-                        <span className="BodySmallRegular" title={row.recipients.join(', ')}>
-                          {row.recipients.length} recipient{row.recipients.length === 1 ? '' : 's'}
+                        <span className="BodySmallRegular" title={`To: ${row.recipients.join(', ')}${row.cc?.length ? `\nCc: ${row.cc.join(', ')}` : ''}`}>
+                          {row.recipients.length} To
+                          {row.cc?.length > 0 && <span> · {row.cc.length} Cc</span>}
                           {row.recipientsOverridden && <span className="ui-muted-3"> · overridden</span>}
                         </span>
                       </TableCell>

@@ -9,6 +9,8 @@ export interface PendingEmail {
   fileName: string;
   downloadUrl: string;
   recipients: string[];
+  /** CC recipients (copied on the email). Optional for backward compatibility with older queued entries. */
+  cc?: string[];
   subject: string;
   reportTitle: string;
   message: string;
