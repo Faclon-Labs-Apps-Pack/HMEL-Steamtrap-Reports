@@ -1,16 +1,20 @@
 /**
- * The S1 sensor reports a numeric trap-status code (confirmed by the client 2026-07-16).
- * Note: code 8 is intentionally absent from the source system.
+ * The S1 sensor reports a numeric trap-status code. Updated per client 2026-10-26:
+ *   1 = Normal, 3 = Normal (was "Flooding" — now counted as Normal), 5 = Valve Closed,
+ *   6 = Choking, 7 = No Status, 8 = Offline, 9 = Leak.
+ * Codes 2 and 4 are legacy (Mild Flooding / Mild Leak) and kept only for backward safety — the
+ * current algorithm emits the codes above. Flooding is no longer a reported status (code 3 → Normal).
  */
 export const STATUS_CODE_MAP: Record<number, string> = {
   1: 'Normal',
-  2: 'Mild Flooding',
-  3: 'Heavy Flooding',
-  4: 'Mild Leak',
+  2: 'Mild Flooding', // legacy, not emitted by the current algorithm
+  3: 'Normal', // was Heavy Flooding; client 2026-10-26: code 3 now counts as Normal
+  4: 'Mild Leak', // legacy, not emitted by the current algorithm
   5: 'Valve Closed',
   6: 'Choking',
   7: 'No Status',
-  9: 'Heavy Leak',
+  8: 'Offline', // client 2026-10-26: code 8 = Offline (previously undefined → fell back to No Status)
+  9: 'Heavy Leak', // displayed/grouped as "Leak"
 };
 
 /** Column order for the Unit vs Trap Status matrix: healthy first, then escalating fault severity, then unclassifiable/absent. */
