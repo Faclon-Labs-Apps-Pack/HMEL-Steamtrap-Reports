@@ -1,6 +1,5 @@
 import { CronExpressionParser } from 'cron-parser';
 import { REPORT_TIMEZONE, REPORT_LEAD_TIME_MINUTES } from '../config';
-import { setReportRunActive } from './fileServerWatchdog';
 
 const LEAD_TIME_MS = REPORT_LEAD_TIME_MINUTES * 60 * 1000;
 
@@ -75,17 +74,12 @@ export function scheduleReport<T>(
     longSetTimeout(async () => {
       console.log(`[scheduler:${name}] Generating…`);
       let payload: T;
-      // Mark the run active so the file-server watchdog doesn't mistake a saturated event loop
-      // (heavy generation) for a dead socket and restart mid-run — see fileServerWatchdog.ts.
-      setReportRunActive(true);
       try {
         payload = await generate(occurrence);
       } catch (err) {
         console.error(`[scheduler:${name}] Generation failed:`, err);
         scheduleNext(occurrence);
         return;
-      } finally {
-        setReportRunActive(false);
       }
 
       const sendDelayMs = Math.max(0, occurrence.getTime() - Date.now());
@@ -93,16 +87,12 @@ export function scheduleReport<T>(
 
       longSetTimeout(async () => {
         console.log(`[scheduler:${name}] Sending…`);
-        // Sending also blocks the loop (per-unit sends + the delivery-confirm wait) — keep the
-        // watchdog paused so it can't restart us during the send window.
-        setReportRunActive(true);
         try {
           await send(payload);
           console.log(`[scheduler:${name}] Done.`);
         } catch (err) {
           console.error(`[scheduler:${name}] Send failed:`, err);
         } finally {
-          setReportRunActive(false);
           scheduleNext(occurrence);
         }
       }, sendDelayMs);
