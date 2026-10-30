@@ -35,24 +35,36 @@ function formatStatusDuration(pct: number, durationHours: number): string {
   return `${pad2(hh)}:${pad2(mm)}:${pad2(ss)}`;
 }
 
-const HEADERS = [
-  'Sr No',
-  'Unit',
-  'Tag No',
-  'Type of Steam',
-  'Device ID',
-  'Location',
-  'Live Status (now)',
-  'Duration (hrs)',
-  ...ANALYSIS_STATUS_GROUPS.map((g) => g.label),
-  'Change in Status',
-  'Number of Corrective Actions',
-  'Number of Feedbacks',
-  'Leak Rate (Kg/hr)',
-  'Cost of Steam (INR/MT)',
-  'Saving (MT)',
-  'Loss (MT)',
-];
+/**
+ * The per-status "Change in <status> status" columns (one per status group except Offline) shown
+ * ONLY in the on-demand Analysis report (the admin UI's Generate Report tab) — each counts how many
+ * times a trap changed INTO that status over the selected range. The scheduled Daily/Weekly reports
+ * never show these; they keep the single "Change in Status" total.
+ */
+const CHANGE_STATUS_GROUPS = ANALYSIS_STATUS_GROUPS.filter((g) => g.label !== 'Offline');
+
+function buildHeaders(includePerStatusChanges: boolean): string[] {
+  return [
+    'Sr No',
+    'Unit',
+    'Tag No',
+    'Type of Steam',
+    'Device ID',
+    'Location',
+    'Live Status (now)',
+    'Duration (hrs)',
+    ...ANALYSIS_STATUS_GROUPS.map((g) => g.label),
+    ...(includePerStatusChanges ? CHANGE_STATUS_GROUPS.map((g) => `Change in ${g.label} status`) : []),
+    // With the per-status breakdown present, the running total reads as "Change in All Status".
+    includePerStatusChanges ? 'Change in All Status' : 'Change in Status',
+    'Number of Corrective Actions',
+    'Number of Feedbacks',
+    'Leak Rate (Kg/hr)',
+    'Cost of Steam (INR/MT)',
+    'Saving (MT)',
+    'Loss (MT)',
+  ];
+}
 
 /** Parses a property string ("0.5", "2473", "N/A") to a number; non-numeric -> '' so the cell is blank, not text. */
 function toNumber(value: string): number | string {
@@ -67,8 +79,14 @@ function toNumber(value: string): number | string {
  * in each status as hh:mm:ss (share of S1 readings × the analysis window), not percentages, per
  * explicit client request.
  */
-export function buildDailyAnalysisSheet(sheet: Worksheet, rows: DailyAnalysisRow[]): void {
-  const LOCATION_COL = HEADERS.indexOf('Location');
+export function buildDailyAnalysisSheet(
+  sheet: Worksheet,
+  rows: DailyAnalysisRow[],
+  opts: { includePerStatusChanges?: boolean } = {},
+): void {
+  const includePerStatusChanges = opts.includePerStatusChanges ?? false;
+  const headers = buildHeaders(includePerStatusChanges);
+  const LOCATION_COL = headers.indexOf('Location');
   const rowValues = rows.map((row) => {
     const status = classifyStatus(row.currentStatus);
     return [
@@ -86,6 +104,10 @@ export function buildDailyAnalysisSheet(sheet: Worksheet, rows: DailyAnalysisRow
           row.durationHours,
         ),
       ),
+      // Per-status "changed into X" counts (on-demand report only), keyed by the grouped label.
+      ...(includePerStatusChanges
+        ? CHANGE_STATUS_GROUPS.map((g) => row.changesIntoStatus?.[g.label] ?? 0)
+        : []),
       row.statusChangeCount,
       row.correctiveActionCount,
       row.feedbackCount,
@@ -99,7 +121,7 @@ export function buildDailyAnalysisSheet(sheet: Worksheet, rows: DailyAnalysisRow
   // Column widths come from the DATA, not the (often long) headings — headings wrap instead of
   // widening a column. Location is capped tighter and wraps. This keeps every column inside one
   // A3-landscape page width when printed and stays readable on screen.
-  sheet.columns = fitColumnWidths(HEADERS, rowValues, {
+  sheet.columns = fitColumnWidths(headers, rowValues, {
     min: 5,
     max: 30,
     maxByCol: { [LOCATION_COL]: 40 },
@@ -109,8 +131,8 @@ export function buildDailyAnalysisSheet(sheet: Worksheet, rows: DailyAnalysisRow
   sheet.views = [{ state: 'frozen', ySplit: 1 }];
 
   const headerRow = sheet.getRow(1);
-  headerRow.values = HEADERS;
-  headerRow.height = estimateHeaderHeight(HEADERS, sheet.columns as { width: number }[]);
+  headerRow.values = headers;
+  headerRow.height = estimateHeaderHeight(headers, sheet.columns as { width: number }[]);
   headerRow.eachCell((cell) => {
     cell.font = HEADER_FONT;
     cell.fill = BLUE_HEADER_FILL;

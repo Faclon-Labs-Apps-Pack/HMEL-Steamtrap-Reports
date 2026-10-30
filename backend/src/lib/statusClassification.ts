@@ -45,6 +45,18 @@ export function isFloodingStatus(status: StatusColumn): boolean {
 }
 
 /**
+ * Collapses a status label to the coarse grouping the Analysis sheet shows: Mild/Heavy Leak -> "Leak",
+ * Mild/Heavy Flooding -> "Flooding"; every other label is unchanged. Used so "changed into <status>"
+ * counts line up with the grouped status/duration columns (e.g. a Mild Leak -> Heavy Leak reading is
+ * NOT counted as a change into Leak, since both are "Leak").
+ */
+export function analysisStatusGroup(status: StatusColumn): string {
+  if (status === 'Mild Leak' || status === 'Heavy Leak') return 'Leak';
+  if (status === 'Mild Flooding' || status === 'Heavy Flooding') return 'Flooding';
+  return status;
+}
+
+/**
  * Collapsed status buckets for the weekly Management Report's Unit vs Trap Status matrix, per
  * the client template ("report templates/ManagementReportFormat for Steam Traps (1) (1).xlsx"):
  * Choked | Flooding | Normal | Leak | No Status | Offline. Mild/Heavy variants fold into one

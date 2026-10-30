@@ -102,7 +102,9 @@ export async function generateRangeAnalysisWorkbooks(
     workbook.creator = 'HMEL Steamtrap Reports';
     workbook.created = generatedAt;
     const sheet = workbook.addWorksheet('Analysis');
-    buildDailyAnalysisSheet(sheet, analysisRows);
+    // On-demand UI report only: show the per-status "Change in <status> status" breakdown columns.
+    // The scheduled Daily/Weekly reports call buildDailyAnalysisSheet without this flag and are unaffected.
+    buildDailyAnalysisSheet(sheet, analysisRows, { includePerStatusChanges: true });
     const title = `Steam Trap Analysis Report–${unitName.trim()}`;
     applyPrintLayout(sheet, { reportDate, title, repeatHeaderRow: 1 });
 

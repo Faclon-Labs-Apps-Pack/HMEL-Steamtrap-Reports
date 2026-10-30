@@ -22,6 +22,8 @@ export interface DailyAnalysisRow {
   durationHours: number;
   statusPercentages: Record<StatusColumn, number>;
   statusChangeCount: number;
+  /** Per-(grouped)-status count of how many times the device changed INTO that status over the window — only the on-demand Analysis report renders these; undefined on the cached/scheduled path. */
+  changesIntoStatus?: Record<string, number>;
   correctiveActionCount: number;
   feedbackCount: number;
   leakRate: string;
@@ -99,6 +101,7 @@ export function buildDailyAnalysisRows(
       durationHours,
       statusPercentages,
       statusChangeCount: stats?.statusChangeCount ?? 0,
+      changesIntoStatus: stats?.changesIntoStatus,
       correctiveActionCount: correctiveActionCountByDevID.get(device.devID) ?? 0,
       feedbackCount: feedbackCountByDevID.get(device.devID) ?? 0,
       leakRate: properties?.leakRate || 'N/A',

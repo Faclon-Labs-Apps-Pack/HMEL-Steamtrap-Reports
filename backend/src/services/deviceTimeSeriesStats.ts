@@ -1,6 +1,6 @@
 import { getBulkDeviceTimeSeries } from './iosenseApi';
-import { classifyStatus, STATUS_COLUMNS, FLOODING_STATUSES, isFloodingStatus, type StatusColumn } from '../lib/statusClassification';
-import { countStatusChanges } from '../lib/countStatusChanges';
+import { classifyStatus, analysisStatusGroup, STATUS_COLUMNS, FLOODING_STATUSES, isFloodingStatus, type StatusColumn } from '../lib/statusClassification';
+import { countStatusChanges, countChangesIntoStatus } from '../lib/countStatusChanges';
 import type { Device } from '../types/device';
 
 const STATUS_SENSOR = 'S1';
@@ -9,6 +9,14 @@ export interface DeviceTimeSeriesStats {
   statusChangeCount: number;
   /** % of S1 readings in range classified as each status. Approximates % of duration, assuming roughly uniform sampling interval (observed ~30 min in practice). */
   statusPercentages: Record<StatusColumn, number>;
+  /**
+   * How many times the device changed INTO each (grouped) status over the window — the per-status
+   * breakdown of `statusChangeCount`, keyed by the grouped label (Normal / Leak / Choking / Valve
+   * Closed / No Status / Offline). Only the on-demand Analysis report renders these; the scheduled
+   * reports ignore the field. NOT cached per-day (transition counts don't sum across day
+   * boundaries), so it is only populated on the live range sweep below.
+   */
+  changesIntoStatus?: Record<string, number>;
 }
 
 /**
@@ -98,6 +106,9 @@ export async function getTimeSeriesStatsByDevice(
   for (const device of devices) {
     const points = seriesByDevID.get(device.devID) ?? [];
     const statusChangeCount = countStatusChanges(points);
+    // Per-status "changed into X" counts, grouped the same way as the status/duration columns
+    // (Mild/Heavy Leak -> "Leak"). Classified labels, so a 1->3 reading (both Normal) isn't a change.
+    const changesIntoStatus = countChangesIntoStatus(points, (value) => analysisStatusGroup(classifyStatus(value)));
 
     // Flooding readings are DROPPED ENTIRELY: excluded from the denominator and left at 0%, so the
     // remaining statuses are shares of the non-flooding readings (see FLOODING_STATUSES).
@@ -117,7 +128,7 @@ export async function getTimeSeriesStatsByDevice(
       }
     }
 
-    result.set(device.devID, { statusChangeCount, statusPercentages: percentages });
+    result.set(device.devID, { statusChangeCount, statusPercentages: percentages, changesIntoStatus });
   }
   return result;
 }
