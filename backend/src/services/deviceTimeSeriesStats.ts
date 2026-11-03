@@ -11,12 +11,20 @@ export interface DeviceTimeSeriesStats {
   statusPercentages: Record<StatusColumn, number>;
   /**
    * How many times the device changed INTO each (grouped) status over the window — the per-status
-   * breakdown of `statusChangeCount`, keyed by the grouped label (Normal / Leak / Choking / Valve
-   * Closed / No Status / Offline). Only the on-demand Analysis report renders these; the scheduled
-   * reports ignore the field. NOT cached per-day (transition counts don't sum across day
-   * boundaries), so it is only populated on the live range sweep below.
+   * breakdown shown by the on-demand Analysis report, keyed by the grouped label (Normal / Leak /
+   * Choking / Valve Closed / No Status / Offline). Counted on GROUPED labels over NON-FLOODING
+   * readings (flooding is dropped from every report metric), so a raw 1→3 reading — both "Normal" —
+   * is not a change. NOT cached per-day (transition counts don't sum across day boundaries), so it
+   * is only populated on the live range sweep below.
    */
   changesIntoStatus?: Record<string, number>;
+  /**
+   * Total of `changesIntoStatus` — the change count on the SAME grouped, flooding-free stream, so
+   * the on-demand report's "Change in All Status" column equals the sum of its per-status columns
+   * exactly. The scheduled reports keep using `statusChangeCount` (raw-value compares, unchanged
+   * long-standing behavior, and what the daily-stats cache stores).
+   */
+  groupedChangeCount?: number;
 }
 
 /**
@@ -107,8 +115,11 @@ export async function getTimeSeriesStatsByDevice(
     const points = seriesByDevID.get(device.devID) ?? [];
     const statusChangeCount = countStatusChanges(points);
     // Per-status "changed into X" counts, grouped the same way as the status/duration columns
-    // (Mild/Heavy Leak -> "Leak"). Classified labels, so a 1->3 reading (both Normal) isn't a change.
-    const changesIntoStatus = countChangesIntoStatus(points, (value) => analysisStatusGroup(classifyStatus(value)));
+    // (Mild/Heavy Leak -> "Leak"). Classified labels, so a 1->3 reading (both Normal) isn't a
+    // change — and flooding readings are dropped first, consistent with every other metric.
+    const nonFloodingPoints = points.filter((p) => !isFloodingStatus(classifyStatus(p.value)));
+    const changesIntoStatus = countChangesIntoStatus(nonFloodingPoints, (value) => analysisStatusGroup(classifyStatus(value)));
+    const groupedChangeCount = Object.values(changesIntoStatus).reduce((s, n) => s + n, 0);
 
     // Flooding readings are DROPPED ENTIRELY: excluded from the denominator and left at 0%, so the
     // remaining statuses are shares of the non-flooding readings (see FLOODING_STATUSES).
@@ -128,7 +139,7 @@ export async function getTimeSeriesStatsByDevice(
       }
     }
 
-    result.set(device.devID, { statusChangeCount, statusPercentages: percentages, changesIntoStatus });
+    result.set(device.devID, { statusChangeCount, statusPercentages: percentages, changesIntoStatus, groupedChangeCount });
   }
   return result;
 }

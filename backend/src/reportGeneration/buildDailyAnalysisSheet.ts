@@ -36,12 +36,14 @@ function formatStatusDuration(pct: number, durationHours: number): string {
 }
 
 /**
- * The per-status "Change in <status> status" columns (one per status group except Offline) shown
+ * The per-status "Change in <status> status" columns (one per status group, Offline included) shown
  * ONLY in the on-demand Analysis report (the admin UI's Generate Report tab) — each counts how many
- * times a trap changed INTO that status over the selected range. The scheduled Daily/Weekly reports
- * never show these; they keep the single "Change in Status" total.
+ * times a trap changed INTO that status over the selected range, on grouped flooding-free labels.
+ * With every group present, the columns sum EXACTLY to "Change in All Status" (client-reported
+ * mismatch 2026-11-03: the old total was counted on raw S1 codes and Offline had no column, so the
+ * numbers never added up). The scheduled Daily/Weekly reports never show these columns.
  */
-const CHANGE_STATUS_GROUPS = ANALYSIS_STATUS_GROUPS.filter((g) => g.label !== 'Offline');
+const CHANGE_STATUS_GROUPS = ANALYSIS_STATUS_GROUPS;
 
 function buildHeaders(includePerStatusChanges: boolean): string[] {
   return [
@@ -82,11 +84,14 @@ function toNumber(value: string): number | string {
 export function buildDailyAnalysisSheet(
   sheet: Worksheet,
   rows: DailyAnalysisRow[],
-  opts: { includePerStatusChanges?: boolean } = {},
+  opts: { includePerStatusChanges?: boolean; periodLabel?: string } = {},
 ): void {
   const includePerStatusChanges = opts.includePerStatusChanges ?? false;
   const headers = buildHeaders(includePerStatusChanges);
   const LOCATION_COL = headers.indexOf('Location');
+  // With a period label (on-demand range reports), row 1 states the data window and the header
+  // moves to row 2 — so every reader sees exactly which dates the numbers cover.
+  const headerRowIdx = opts.periodLabel ? 2 : 1;
   const rowValues = rows.map((row) => {
     const status = classifyStatus(row.currentStatus);
     return [
@@ -127,10 +132,21 @@ export function buildDailyAnalysisSheet(
     maxByCol: { [LOCATION_COL]: 40 },
     dataDriven: true,
   });
-  // Keep the header row visible while scrolling through the device rows, per explicit client request.
-  sheet.views = [{ state: 'frozen', ySplit: 1 }];
+  // Keep the header (and the period line, when present) visible while scrolling, per client request.
+  sheet.views = [{ state: 'frozen', ySplit: headerRowIdx }];
 
-  const headerRow = sheet.getRow(1);
+  if (opts.periodLabel) {
+    const periodRow = sheet.getRow(1);
+    periodRow.getCell(1).value = opts.periodLabel;
+    sheet.mergeCells(1, 1, 1, headers.length);
+    periodRow.height = 20;
+    const cell = periodRow.getCell(1);
+    cell.font = { bold: true, size: 11 };
+    cell.alignment = { vertical: 'middle', horizontal: 'left' };
+    cell.border = ALL_BORDERS;
+  }
+
+  const headerRow = sheet.getRow(headerRowIdx);
   headerRow.values = headers;
   headerRow.height = estimateHeaderHeight(headers, sheet.columns as { width: number }[]);
   headerRow.eachCell((cell) => {
@@ -142,7 +158,7 @@ export function buildDailyAnalysisSheet(
 
   rows.forEach((row, i) => {
     const status = classifyStatus(row.currentStatus);
-    const excelRow = sheet.getRow(i + 2);
+    const excelRow = sheet.getRow(i + headerRowIdx + 1);
     excelRow.values = rowValues[i];
     // Wrap every cell so long text (Unit / Tag / Device ID / Location) wraps instead of widening the
     // column; row height auto-fits to the wrapped content when the file is opened.

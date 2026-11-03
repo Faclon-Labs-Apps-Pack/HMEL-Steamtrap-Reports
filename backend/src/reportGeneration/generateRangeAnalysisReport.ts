@@ -8,6 +8,7 @@ import { getDevicePropertiesByDevice } from '../services/devicePropertiesApi';
 import { getSteamLossByDevice, getSteamSavingByDevice } from '../services/steamConsumptionApi';
 import { buildDailyAnalysisRows } from '../lib/buildDailyReportRows';
 import { toEpochMs, type DateRange } from '../lib/dateRange';
+import { REPORT_TIMEZONE } from '../config';
 import { buildDailyAnalysisSheet } from './buildDailyAnalysisSheet';
 import { applyPrintLayout, formatReportDate } from './printLayout';
 import { filterDevicesByUnit, type DailyUnitReport } from './generateDailyReport';
@@ -65,7 +66,13 @@ export async function generateRangeAnalysisWorkbooks(
   const feedbackCountByDevID = new Map([...feedbackDatesByDevID].map(([id, dates]) => [id, dates.length]));
 
   report(`Analyzing S1 history over the range for ${devices.length} devices…`);
-  const timeSeriesStatsByDevID = await getTimeSeriesStatsByDevice(devices, startMs, endMs);
+  const rawStatsByDevID = await getTimeSeriesStatsByDevice(devices, startMs, endMs);
+  // On-demand report: the "Change in All Status" total uses the GROUPED, flooding-free change
+  // count — the same stream as the per-status breakdown columns — so the total always equals the
+  // sum of those columns (the raw-value count double-counted e.g. 1→3, both "Normal").
+  const timeSeriesStatsByDevID = new Map(
+    [...rawStatsByDevID].map(([id, s]) => [id, { ...s, statusChangeCount: s.groupedChangeCount ?? s.statusChangeCount }]),
+  );
 
   report('Loading device properties…');
   const propertiesByDevID = await getDevicePropertiesByDevice(devices);
@@ -91,6 +98,13 @@ export async function generateRangeAnalysisWorkbooks(
   const unitNames = [...new Set(allRows.map((r) => r.department))].sort((a, b) => a.localeCompare(b));
   const rangeStamp = `${stamp(range.start)}-to-${stamp(range.end)}`;
   const reportDate = formatReportDate(generatedAt);
+  // Stated inside the sheet so every reader knows exactly which window the numbers cover.
+  const fmtIST = (d: Date) =>
+    new Intl.DateTimeFormat('en-GB', {
+      timeZone: REPORT_TIMEZONE,
+      day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false,
+    }).format(d).replace(',', '');
+  const periodLabel = `Report data period: ${fmtIST(range.start)} to ${fmtIST(range.end)} (IST)`;
 
   const reports: DailyUnitReport[] = [];
   for (const unitName of unitNames) {
@@ -104,9 +118,9 @@ export async function generateRangeAnalysisWorkbooks(
     const sheet = workbook.addWorksheet('Analysis');
     // On-demand UI report only: show the per-status "Change in <status> status" breakdown columns.
     // The scheduled Daily/Weekly reports call buildDailyAnalysisSheet without this flag and are unaffected.
-    buildDailyAnalysisSheet(sheet, analysisRows, { includePerStatusChanges: true });
+    buildDailyAnalysisSheet(sheet, analysisRows, { includePerStatusChanges: true, periodLabel });
     const title = `Steam Trap Analysis Report–${unitName.trim()}`;
-    applyPrintLayout(sheet, { reportDate, title, repeatHeaderRow: 1 });
+    applyPrintLayout(sheet, { reportDate, title, repeatHeaderRow: 2 });
 
     const reportName = `${title}-${rangeStamp}`;
     reports.push({
