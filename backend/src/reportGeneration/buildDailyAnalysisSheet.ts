@@ -36,14 +36,15 @@ function formatStatusDuration(pct: number, durationHours: number): string {
 }
 
 /**
- * The per-status "Change in <status> status" columns (one per status group, Offline included) shown
- * ONLY in the on-demand Analysis report (the admin UI's Generate Report tab) — each counts how many
- * times a trap changed INTO that status over the selected range, on grouped flooding-free labels.
- * With every group present, the columns sum EXACTLY to "Change in All Status" (client-reported
- * mismatch 2026-11-03: the old total was counted on raw S1 codes and Offline had no column, so the
- * numbers never added up). The scheduled Daily/Weekly reports never show these columns.
+ * The per-status "Change in <status> status" columns shown ONLY in the on-demand Analysis report
+ * (the admin UI's Generate Report tab) — each counts how many times a trap changed INTO that REAL
+ * CONDITION over the selected range. Offline / No Status have no change columns because the
+ * counter ignores telemetry gaps entirely (client decision 2026-11-04, after a unit-wide gateway
+ * outage credited every CDU trap with 2 phantom changes); their DURATION columns remain. The
+ * columns sum exactly to "Change in All Status". The scheduled Daily/Weekly reports never show
+ * these columns.
  */
-const CHANGE_STATUS_GROUPS = ANALYSIS_STATUS_GROUPS;
+const CHANGE_STATUS_GROUPS = ANALYSIS_STATUS_GROUPS.filter((g) => g.label !== 'Offline' && g.label !== 'No Status');
 
 function buildHeaders(includePerStatusChanges: boolean): string[] {
   return [

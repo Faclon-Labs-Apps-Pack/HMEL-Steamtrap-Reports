@@ -5,17 +5,22 @@ import type { Device } from '../types/device';
 
 const STATUS_SENSOR = 'S1';
 
+/** The real trap conditions — the only labels the change counter sees (grouped-label form). */
+const CONDITION_LABELS = new Set(['Normal', 'Leak', 'Choking', 'Valve Closed']);
+
 export interface DeviceTimeSeriesStats {
   statusChangeCount: number;
   /** % of S1 readings in range classified as each status. Approximates % of duration, assuming roughly uniform sampling interval (observed ~30 min in practice). */
   statusPercentages: Record<StatusColumn, number>;
   /**
-   * How many times the device changed INTO each (grouped) status over the window — the per-status
-   * breakdown shown by the on-demand Analysis report, keyed by the grouped label (Normal / Leak /
-   * Choking / Valve Closed / No Status / Offline). Counted on GROUPED labels over NON-FLOODING
-   * readings (flooding is dropped from every report metric), so a raw 1→3 reading — both "Normal" —
-   * is not a change. NOT cached per-day (transition counts don't sum across day boundaries), so it
-   * is only populated on the live range sweep below.
+   * How many times the device changed INTO each REAL CONDITION (Normal / Leak / Choking / Valve
+   * Closed) over the window — the per-status breakdown shown by the on-demand Analysis report.
+   * Counted on grouped labels over CONDITION readings only: Flooding is dropped (as everywhere),
+   * and Offline / No Status readings are invisible to the counter — a telemetry outage is not a
+   * trap-status event (2026-11-04: a unit-wide gateway outage credited every CDU trap with 2
+   * phantom changes). Normal → [offline gap] → Normal = 0 changes; Normal → [gap] → Leak = 1.
+   * NOT cached per-day (transition counts don't sum across day boundaries), so it is only
+   * populated on the live range sweep below.
    */
   changesIntoStatus?: Record<string, number>;
   /**
@@ -114,11 +119,13 @@ export async function getTimeSeriesStatsByDevice(
   for (const device of devices) {
     const points = seriesByDevID.get(device.devID) ?? [];
     const statusChangeCount = countStatusChanges(points);
-    // Per-status "changed into X" counts, grouped the same way as the status/duration columns
-    // (Mild/Heavy Leak -> "Leak"). Classified labels, so a 1->3 reading (both Normal) isn't a
-    // change — and flooding readings are dropped first, consistent with every other metric.
-    const nonFloodingPoints = points.filter((p) => !isFloodingStatus(classifyStatus(p.value)));
-    const changesIntoStatus = countChangesIntoStatus(nonFloodingPoints, (value) => analysisStatusGroup(classifyStatus(value)));
+    // Per-status "changed into X" counts on REAL CONDITIONS only: grouped like the duration
+    // columns (Mild/Heavy Leak -> "Leak"), with Flooding dropped (as everywhere) AND Offline /
+    // No Status readings skipped — a telemetry gap is not a trap-status change, and counting it
+    // credited whole units with phantom changes during gateway outages. The Offline/No Status
+    // DURATION columns are unaffected (statusPercentages below still see every reading).
+    const conditionPoints = points.filter((p) => CONDITION_LABELS.has(analysisStatusGroup(classifyStatus(p.value))));
+    const changesIntoStatus = countChangesIntoStatus(conditionPoints, (value) => analysisStatusGroup(classifyStatus(value)));
     const groupedChangeCount = Object.values(changesIntoStatus).reduce((s, n) => s + n, 0);
 
     // Flooding readings are DROPPED ENTIRELY: excluded from the denominator and left at 0%, so the
