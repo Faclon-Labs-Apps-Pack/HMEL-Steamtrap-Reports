@@ -33,6 +33,11 @@ export interface Schedule {
   name: string;
   type: 'daily' | 'weekly';
   sendTime: string;
+  /** True when the invocation (send) time comes from the overrides file rather than .env. */
+  sendTimeOverridden: boolean;
+  /** Daily only: data-day boundary, HH:MM:SS — the report window runs yesterday@cycle → today@cycle. */
+  cycleTime?: string;
+  cycleTimeOverridden?: boolean;
   paused: boolean;
   recipients: string[];
   recipientsOverridden: boolean;
@@ -209,6 +214,22 @@ export function saveCc(key: string, type: 'daily' | 'weekly', cc: string[] | nul
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ type, cc }),
+  });
+}
+
+/**
+ * Set a section's invocation (send) time and — daily only — its cycle time. Omitted fields are
+ * untouched; null reverts that field to its default (.env send time / 00:00:00 cycle).
+ */
+export function saveTimes(
+  key: string,
+  type: 'daily' | 'weekly',
+  times: { sendTime?: string | null; cycleTime?: string | null },
+): Promise<{ ok: boolean }> {
+  return request(`/api/schedules/${encodeURIComponent(key)}/times`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type, ...times }),
   });
 }
 

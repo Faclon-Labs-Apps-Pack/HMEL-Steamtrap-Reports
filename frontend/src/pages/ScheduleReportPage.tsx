@@ -18,8 +18,7 @@ import {
   resumeAll,
   pauseSection,
   resumeSection,
-  saveRecipients,
-  saveCc,
+  saveTimes,
   type Schedule,
   type SchedulesResponse,
 } from '../services/adminApi';
@@ -43,12 +42,20 @@ const LAST_RUN_COLOR: Record<string, 'Positive' | 'Negative' | 'Notice' | 'Neutr
   skipped: 'Notice',
 };
 
+/** The HH:MM part of a sendTime string — weekly rows come as "day Mon @ 08:30". */
+function extractHHMM(sendTime: string): string {
+  const m = /(\d{1,2}:\d{2})\s*$/.exec(sendTime);
+  return m ? m[1].padStart(5, '0') : '';
+}
+
 /**
- * Recipient editor in a modal (per redesign 2026-10-19 — no more large inline form above the
- * table). Bulk paste stays supported: comma or newline separated. Saves to the overrides file;
- * changes apply from the NEXT scheduled run (fire-time read — confirmed backend behavior).
+ * Invocation (send) time + cycle time editor — replaced the recipients editor per client request
+ * 2026-11-11. Invocation time = when the report is emailed (IST). Cycle time (daily only) = the
+ * data-day boundary: the report's 24h window runs yesterday@cycle -> today@cycle (default
+ * 00:00:00 = the previous calendar day). Saves to the overrides file; the scheduler reconciles
+ * send-time changes within a minute, no restart.
  */
-function RecipientsModal({
+function TimesModal({
   row,
   onSaved,
   onClose,
@@ -57,23 +64,18 @@ function RecipientsModal({
   onSaved: () => void;
   onClose: () => void;
 }) {
-  const [text, setText] = useState(row.recipients.join('\n'));
-  const [ccText, setCcText] = useState((row.cc ?? []).join('\n'));
+  const isDaily = row.type === 'daily';
+  const [sendTime, setSendTime] = useState(extractHHMM(row.sendTime));
+  const [cycleTime, setCycleTime] = useState(row.cycleTime ?? '00:00:00');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const isDaily = row.type === 'daily'; // CC applies to daily reports only
+  const weeklyDay = !isDaily ? /day\s+(\S+)/.exec(row.sendTime)?.[1] : undefined;
 
-  const parsed = text.split(/[\n,]/).map((s) => s.trim()).filter(Boolean);
-  const parsedCc = ccText.split(/[\n,]/).map((s) => s.trim()).filter(Boolean);
-  const duplicates = [...new Set(parsed.filter((e, i) => parsed.findIndex((x) => x.toLowerCase() === e.toLowerCase()) !== i))];
-
-  /** Saves To and (for daily) CC together. */
-  async function save(recipients: string[], cc: string[]) {
+  async function save(times: { sendTime?: string | null; cycleTime?: string | null }) {
     setSaving(true);
     setError(null);
     try {
-      await saveRecipients(row.key, row.type, recipients);
-      if (isDaily) await saveCc(row.key, row.type, cc);
+      await saveTimes(row.key, row.type, times);
       onSaved();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to save changes.');
@@ -81,29 +83,15 @@ function RecipientsModal({
     }
   }
 
-  /** Reverts To and/or CC back to the .env defaults (null = revert). */
-  async function revert(which: 'recipients' | 'cc') {
-    setSaving(true);
-    setError(null);
-    try {
-      if (which === 'recipients') await saveRecipients(row.key, row.type, null);
-      else await saveCc(row.key, row.type, null);
-      onSaved();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unable to revert.');
-      setSaving(false);
-    }
-  }
-
   return (
     <Modal
       isOpen
-      size="Medium"
+      size="Small"
       onClose={onClose}
       header={
         <ModalHeader
-          title={`Edit recipients — ${row.name}`}
-          subtitle={`${row.type === 'daily' ? 'Daily' : 'Weekly'} report · ${row.recipients.length} To${isDaily ? ` · ${parsedCc.length} Cc` : ''}${row.recipientsOverridden ? ' · To overridden' : ''}`}
+          title={`Edit times — ${row.name}`}
+          subtitle={`${isDaily ? 'Daily' : 'Weekly'} report${row.sendTimeOverridden ? ' · send time overridden' : ''}${row.cycleTimeOverridden ? ' · cycle overridden' : ''}`}
           onClose={onClose}
         />
       }
@@ -113,9 +101,9 @@ function RecipientsModal({
             <Button
               variant="Primary"
               isLoading={saving}
-              isDisabled={parsed.length === 0}
-              label={isDaily ? `Save ${parsed.length} To · ${parsedCc.length} Cc` : `Save ${parsed.length} recipient${parsed.length === 1 ? '' : 's'}`}
-              onClick={() => void save(parsed, parsedCc)}
+              isDisabled={!sendTime}
+              label="Save times"
+              onClick={() => void save(isDaily ? { sendTime, cycleTime } : { sendTime })}
             />
           }
           secondaryAction={<Button variant="Secondary" label="Cancel" onClick={onClose} />}
@@ -123,53 +111,53 @@ function RecipientsModal({
       }
     >
       <ModalBody>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <div>
-            <label className="ui-field-label" htmlFor="rcpt-edit">To — one per line, or comma separated</label>
-            <textarea
-              id="rcpt-edit"
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              rows={Math.min(12, Math.max(4, parsed.length + 1))}
-              style={{ width: '100%', font: 'inherit', fontSize: 13.5, padding: 10, border: '1px solid var(--ui-border)', borderRadius: 7, boxSizing: 'border-box' }}
-              placeholder={'a@hmel.in\nb@hmel.in'}
+            <label className="ui-field-label" htmlFor="send-time-edit">
+              Invocation (send) time, IST{weeklyDay ? ` — every ${weeklyDay}` : ''}
+            </label>
+            <input
+              id="send-time-edit"
+              type="time"
+              value={sendTime}
+              onChange={(e) => setSendTime(e.target.value)}
+              style={{ font: 'inherit', fontSize: 14, padding: '8px 10px', border: '1px solid var(--ui-border)', borderRadius: 7 }}
             />
-            {row.recipientsOverridden && (
+            <p className="BodySmallRegular ui-muted" style={{ margin: '6px 0 0' }}>
+              When the report email goes out{weeklyDay ? ` (its day stays ${weeklyDay})` : ' each day'}. Generation starts ~15 minutes earlier.
+            </p>
+            {row.sendTimeOverridden && (
               <div style={{ marginTop: 6 }}>
-                <Button variant="Gray" size="XSmall" label="Revert To to .env" onClick={() => void revert('recipients')} />
+                <Button variant="Gray" size="XSmall" isLoading={saving} label="Revert send time to .env" onClick={() => void save({ sendTime: null })} />
               </div>
             )}
           </div>
           {isDaily && (
             <div>
-              <label className="ui-field-label" htmlFor="cc-edit">Cc — copied on this report (one per line, or comma separated)</label>
-              <textarea
-                id="cc-edit"
-                value={ccText}
-                onChange={(e) => setCcText(e.target.value)}
-                rows={Math.min(10, Math.max(3, parsedCc.length + 1))}
-                style={{ width: '100%', font: 'inherit', fontSize: 13.5, padding: 10, border: '1px solid var(--ui-border)', borderRadius: 7, boxSizing: 'border-box' }}
-                placeholder={'manager@hmel.in'}
+              <label className="ui-field-label" htmlFor="cycle-time-edit">Cycle time — the data day starts/ends here</label>
+              <input
+                id="cycle-time-edit"
+                type="time"
+                step={1}
+                value={cycleTime}
+                onChange={(e) => setCycleTime(e.target.value)}
+                style={{ font: 'inherit', fontSize: 14, padding: '8px 10px', border: '1px solid var(--ui-border)', borderRadius: 7 }}
               />
               <p className="BodySmallRegular ui-muted" style={{ margin: '6px 0 0' }}>
-                Common managers typically go here so they're copied on every unit rather than listed as a To.
-                Leave blank for no Cc. Anyone also in To is kept as To only.
+                The report covers the most recent full 24h ending at this time — 00:00:00 means the
+                previous calendar day (the default); 06:00:00 means yesterday 06:00 to today 06:00.
+                A non-midnight window is stated inside the report's Analysis sheet.
               </p>
-              {row.ccOverridden && (
+              {row.cycleTimeOverridden && (
                 <div style={{ marginTop: 6 }}>
-                  <Button variant="Gray" size="XSmall" label="Revert Cc to .env" onClick={() => void revert('cc')} />
+                  <Button variant="Gray" size="XSmall" isLoading={saving} label="Revert cycle to 00:00:00" onClick={() => void save({ cycleTime: null })} />
                 </div>
               )}
             </div>
           )}
-          {duplicates.length > 0 && (
-            <p className="BodySmallRegular" style={{ color: 'var(--ui-amber)', margin: 0 }}>
-              Duplicate entries: {duplicates.join(', ')} — only one copy will be kept by the mail system.
-            </p>
-          )}
           <p className="BodySmallRegular ui-muted" style={{ margin: 0 }}>
-            Changes are saved to the runtime overrides file (never .env) and take effect from the
-            next scheduled run — no restart needed.
+            Changes are saved to the runtime overrides file (never .env). Cycle time applies from the
+            next run; a changed send time is picked up by the scheduler within a minute.
           </p>
           {error && <p className="BodySmallRegular" style={{ color: 'var(--ui-red)', margin: 0 }}>{error}</p>}
         </div>
@@ -313,8 +301,8 @@ export function ScheduleReportPage() {
       </div>
 
       <p className="BodySmallRegular ui-muted" style={{ padding: '6px 24px 0', margin: 0 }}>
-        Changes go to the runtime overrides file (never .env) and apply from each section's next
-        scheduled run. Send times come from .env and are read-only here.
+        Changes go to the runtime overrides file (never .env). Cycle-time edits apply from the next
+        run; invocation-time edits are picked up by the scheduler within a minute.
       </p>
 
       {notice && <div className="ui-alert ui-fade-in" style={{ background: 'var(--ui-green-bg)', color: 'var(--ui-green)' }}>{notice}</div>}
@@ -362,7 +350,8 @@ export function ScheduleReportPage() {
                   <TableHeaderRow>
                     <TableHeaderCell>Section</TableHeaderCell>
                     <TableHeaderCell>Frequency</TableHeaderCell>
-                    <TableHeaderCell>Scheduled time (IST)</TableHeaderCell>
+                    <TableHeaderCell>Invocation time (IST)</TableHeaderCell>
+                    <TableHeaderCell>Cycle time</TableHeaderCell>
                     <TableHeaderCell>Schedule state</TableHeaderCell>
                     <TableHeaderCell>Recipients</TableHeaderCell>
                     <TableHeaderCell>Last run</TableHeaderCell>
@@ -376,7 +365,18 @@ export function ScheduleReportPage() {
                       <TableCell contentType="text">
                         <span className="BodySmallRegular">{row.type === 'daily' ? 'Daily' : 'Weekly'}</span>
                       </TableCell>
-                      <TableCell contentType="text"><CellText title={row.sendTime} /></TableCell>
+                      <TableCell contentType="text">
+                        <span className="BodySmallRegular">
+                          {row.sendTime}
+                          {row.sendTimeOverridden && <span className="ui-muted-3"> · overridden</span>}
+                        </span>
+                      </TableCell>
+                      <TableCell contentType="text">
+                        <span className="BodySmallRegular">
+                          {row.type === 'daily' ? row.cycleTime ?? '00:00:00' : '—'}
+                          {row.cycleTimeOverridden && <span className="ui-muted-3"> · overridden</span>}
+                        </span>
+                      </TableCell>
                       <TableCell contentType="text">
                         <Badge
                           size="Small"
@@ -410,7 +410,9 @@ export function ScheduleReportPage() {
                             label={row.paused ? 'Resume' : 'Pause'}
                             onClick={() => void togglePause(row)}
                           />
-                          <Button variant="Gray" size="XSmall" label="Edit recipients" onClick={() => setEditingKey(row.id)} />
+                          {/* "Edit recipients" became "Edit times" per client request 2026-11-11 —
+                              the backend recipients/cc endpoints remain if the UI is ever wanted back. */}
+                          <Button variant="Gray" size="XSmall" label="Edit times" onClick={() => setEditingKey(row.id)} />
                         </div>
                       </TableCell>
                     </TableRow>
@@ -429,13 +431,13 @@ export function ScheduleReportPage() {
       )}
 
       {editingRow && (
-        <RecipientsModal
+        <TimesModal
           row={editingRow}
           onClose={() => setEditingKey(null)}
           onSaved={() => {
             setEditingKey(null);
             void load();
-            flash(`Recipients for ${editingRow.name} saved — applies from its next scheduled run.`);
+            flash(`Times for ${editingRow.name} saved — the scheduler picks up the change within a minute.`);
           }}
         />
       )}

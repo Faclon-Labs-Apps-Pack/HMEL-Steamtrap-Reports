@@ -187,6 +187,21 @@ export function getDailyUnitSchedules(): SectionSchedule[] {
   return schedules;
 }
 
+/**
+ * Every daily unit the configuration knows about, in env-key form — any <KEY>_DAILY_RECIPIENTS /
+ * <KEY>_DAILY_TIME var defines a unit. This is the unit universe the admin UI's Schedule tab lists
+ * and the scheduler's per-unit send-time / cycle-time overrides can address. (Units appearing only
+ * as device department tags still ride along in the shared daily job.)
+ */
+export function dailyUnitKeysFromEnv(): string[] {
+  const keys = new Set<string>();
+  for (const name of Object.keys(process.env)) {
+    const m = /^(.+)_DAILY_(RECIPIENTS|TIME)$/.exec(name);
+    if (m && m[1] !== 'DAILY_REPORT') keys.add(m[1]);
+  }
+  return [...keys].sort();
+}
+
 /** The shared daily send time (DAILY_REPORT_TIME / DAILY_REPORT_CRON), for every unit without its own <UNIT>_DAILY_TIME. Null if not configured. */
 export function getDailyDefaultCron(): string | null {
   const time = process.env.DAILY_REPORT_TIME;
@@ -237,7 +252,7 @@ export function getStatsIngestCron(): string | null {
 }
 
 /** Converts a plain 24-hour "HH:MM" into an every-day cron expression ("M H * * *"). */
-function dailyTimeToCron(time: string): string {
+export function dailyTimeToCron(time: string): string {
   const match = /^([01]?\d|2[0-3]):([0-5]\d)$/.exec(time.trim());
   if (!match) {
     throw new Error(`Invalid DAILY_REPORT_TIME "${time}" — expected 24-hour HH:MM, e.g. 06:00.`);
@@ -261,7 +276,7 @@ const DAY_OF_WEEK: Record<string, number> = {
  * case-insensitive) + plain 24-hour "HH:MM" into a weekly cron expression ("M H * * D"). The
  * cron day-of-week field is 0-6 (Sunday=0), so ISO 7 (Sunday) maps to cron 0.
  */
-function weeklyDayTimeToCron(day: string, time: string): string {
+export function weeklyDayTimeToCron(day: string, time: string): string {
   const trimmed = day.trim();
   let dow: number | undefined;
   if (/^\d+$/.test(trimmed)) {

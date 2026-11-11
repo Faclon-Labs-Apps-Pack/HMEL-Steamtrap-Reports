@@ -20,7 +20,7 @@ import {
 } from '../lib/dateRange';
 import { extractDepartmentFromTags } from '../lib/departmentTag';
 import { derivePlantCategory, UNASSIGNED } from '../lib/plantCategory';
-import { envKey, isStatsCacheEnabled } from '../config';
+import { envKey, isStatsCacheEnabled, REPORT_TIMEZONE } from '../config';
 import { dailyReportFileName, dailyReportName } from '../lib/reportNaming';
 import { HMEL_LOGO_DAILY_BASE64 } from './hmelLogo';
 import { buildDailySummarySheet, type SummaryWindowValues } from './buildDailySummarySheet';
@@ -104,7 +104,20 @@ export interface DailyUnitReport {
  */
 export async function generateDailyReportWorkbooks(
   onProgress?: (progress: DailyReportProgress) => void,
-  opts?: { unitKeys?: string[]; excludeUnitKeys?: string[]; fast?: boolean; range?: DateRange },
+  opts?: {
+    unitKeys?: string[];
+    excludeUnitKeys?: string[];
+    fast?: boolean;
+    range?: DateRange;
+    /**
+     * A unit's edited data-day window (yesterday@cycle -> today@cycle, from the Schedule tab's
+     * cycle time). Unlike `range` (backfill) it does NOT disable the stats cache: WTD/MTD/YTD
+     * still come from the store's calendar-day buckets (ending on the last complete day), and only
+     * the report window itself is fetched live — one light ~24h bulk call, same weight as a
+     * nightly ingest.
+     */
+    cycleRange?: DateRange;
+  },
 ): Promise<DailyUnitReport[]> {
   const report = (label: string) => onProgress?.({ label });
 
@@ -118,11 +131,21 @@ export async function generateDailyReportWorkbooks(
   // still-in-progress current day — so it always has a full 24h of data and never shows a future
   // end time. (Filename still uses the generation date, like the weekly report.) `opts.range`
   // overrides this to target a specific historical day (used by the backfill script).
-  const range = opts?.range ?? getPreviousDayRange();
+  const range = opts?.range ?? opts?.cycleRange ?? getPreviousDayRange();
   const startMs = toEpochMs(range.start);
   const endMs = toEpochMs(range.end);
   const durationHours = (endMs - startMs) / (1000 * 60 * 60);
   const generatedAt = new Date();
+
+  // An edited (non-midnight) cycle window is stated inside the Analysis sheet, so every reader sees
+  // the exact boundary the numbers cover — a default midnight window needs no label (the report's
+  // date says it all, as always). Same wording/format as the on-demand range report.
+  const fmtIST = (d: Date) =>
+    new Intl.DateTimeFormat('en-GB', {
+      timeZone: REPORT_TIMEZONE,
+      day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false,
+    }).format(d).replace(',', '');
+  const periodLabel = opts?.cycleRange ? `Report data period: ${fmtIST(range.start)} to ${fmtIST(range.end)} (IST)` : undefined;
 
   report(`Loading current status + live temperatures for ${devices.length} devices…`);
   const lastDPs = await getLastDataPoints(devices.map((d) => ({ devID: d.devID, sensor: STATUS_SENSOR })));
@@ -176,13 +199,21 @@ export async function generateDailyReportWorkbooks(
   if (useCache) {
     // Catch up the store for ALL devices through the report day (fills the report day + any gaps from
     // prior outages; each missing day is one light 24h fetch). Idempotent across per-unit runs.
+    // A cycleRange window ends mid-day (today@cycle), so its store anchor is the last COMPLETE
+    // calendar day — the one containing the window's start (24h earlier).
     report('Updating daily-stats cache…');
-    await ensureDaysIngested(allDevices, MONITORING_START, range.end, (m) => report(m));
-    const reportDay = range.end;
+    const reportDay = opts?.cycleRange ? new Date(range.end.getTime() - 24 * 60 * 60 * 1000) : range.end;
+    await ensureDaysIngested(allDevices, MONITORING_START, reportDay, (m) => report(m));
     const wtdFrom = new Date(reportDay);
     wtdFrom.setDate(wtdFrom.getDate() - 6); // 7 calendar days ending on the report day
     const mtdFrom = new Date(reportDay.getFullYear(), reportDay.getMonth(), 1);
-    timeSeriesStatsByDevID = aggregateStatsFromStore(reportDay, reportDay, allDevIDs);
+    if (opts?.cycleRange) {
+      // The edited window doesn't align with the store's calendar-day buckets — fetch it live.
+      report(`Analyzing S1 history (cycle window) for ${devices.length} devices…`);
+      timeSeriesStatsByDevID = await getTimeSeriesStatsByDevice(devices, startMs, endMs);
+    } else {
+      timeSeriesStatsByDevID = aggregateStatsFromStore(reportDay, reportDay, allDevIDs);
+    }
     wtdStats = aggregateStatsFromStore(wtdFrom, reportDay, allDevIDs);
     mtdStats = aggregateStatsFromStore(mtdFrom, reportDay, allDevIDs);
     ytdStats = aggregateStatsFromStore(MONITORING_START, reportDay, allDevIDs);
@@ -309,7 +340,7 @@ export async function generateDailyReportWorkbooks(
       logoImageId,
     );
     const analysisSheet = workbook.addWorksheet('Analysis');
-    buildDailyAnalysisSheet(analysisSheet, analysisRows);
+    buildDailyAnalysisSheet(analysisSheet, analysisRows, periodLabel ? { periodLabel } : undefined);
     const liveStatusSheet = workbook.addWorksheet('Live Status');
     buildDailyLiveStatusSheet(liveStatusSheet, liveStatusRows);
 
@@ -322,7 +353,7 @@ export async function generateDailyReportWorkbooks(
     const reportDate = formatReportDate(generatedAt);
     const title = `Steam Trap Daily Report–${unitName.trim()}`;
     applySummaryPrintLayout(summarySheet);
-    applyPrintLayout(analysisSheet, { reportDate, title, repeatHeaderRow: 1 });
+    applyPrintLayout(analysisSheet, { reportDate, title, repeatHeaderRow: periodLabel ? 2 : 1 });
     applyPrintLayout(liveStatusSheet, { reportDate, title, repeatHeaderRow: 1 });
 
     reports.push({

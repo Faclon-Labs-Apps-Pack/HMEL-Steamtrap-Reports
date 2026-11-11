@@ -5,10 +5,6 @@ import { existsSync } from 'node:fs';
 import {
   getDailyRecipientsForUnit,
   getWeeklyRecipientsForCategory,
-  getDailyUnitSchedules,
-  getDailyDefaultCron,
-  getWeeklyCategorySchedule,
-  getWeeklyDefaultCron,
   getReportBaseUrl,
   getStatsIngestCron,
   isStatsCacheEnabled,
@@ -16,10 +12,18 @@ import {
   getDeliveryConfirmWaitMs,
   getDailyCcForUnit,
   splitToAndCc,
+  dailyUnitKeysFromEnv,
   OUTPUT_DIR,
   ARCHIVE_DIR,
 } from './config';
 import { loadOverrides, isPaused, overrideRecipients, overrideCc } from './scheduler/overrides';
+import {
+  buildDailyCronGroups,
+  buildWeeklyCronGroups,
+  effectiveCycleTime,
+  getCycleDayRange,
+  DEFAULT_CYCLE_TIME,
+} from './scheduler/effectiveSchedule';
 import { startFileServer } from './fileServer';
 import { scheduleReport, longSetTimeout } from './scheduler/scheduleReport';
 import { addPendingEmail, removePendingEmail, getPendingEmails, type PendingEmail } from './scheduler/pendingEmails';
@@ -146,6 +150,47 @@ async function generateWeekly(occurrence: Date, opts?: { categories?: string[] }
 }
 
 /**
+ * Runs the daily generation for a unit scope, honoring per-unit CYCLE TIMES (the data-day boundary,
+ * editable from the admin UI's Schedule tab): units at the default 00:00:00 cycle go through one
+ * batch exactly as before (cache path untouched), while each distinct non-midnight cycle gets its
+ * own workbook call with that cycle's 24h window (yesterday@cycle -> today@cycle). An exclude-style
+ * scope (the shared job) keeps covering units that exist only as device tags.
+ */
+async function generateDailyWithCycles(opts?: { unitKeys?: string[]; excludeUnitKeys?: string[] }) {
+  const log = (p: { label: string }) => console.log(`[daily] ${p.label}`);
+  const overrides = await loadOverrides();
+  const known = dailyUnitKeysFromEnv();
+  const inScope = (key: string) =>
+    opts?.unitKeys ? opts.unitKeys.includes(key) : !(opts?.excludeUnitKeys ?? []).includes(key);
+
+  // Distinct non-default cycles among the in-scope known units.
+  const cycleGroups = new Map<string, string[]>();
+  for (const key of known.filter(inScope)) {
+    const cycle = effectiveCycleTime(key, overrides);
+    if (cycle === DEFAULT_CYCLE_TIME) continue;
+    cycleGroups.set(cycle, [...(cycleGroups.get(cycle) ?? []), key]);
+  }
+
+  const reports = [];
+  for (const [cycle, unitKeys] of cycleGroups) {
+    console.log(`[daily] Cycle ${cycle} units (${unitKeys.join(', ')}): window ${getCycleDayRange(cycle).start.toISOString()} -> ${getCycleDayRange(cycle).end.toISOString()}`);
+    reports.push(...(await generateDailyReportWorkbooks(log, { unitKeys, cycleRange: getCycleDayRange(cycle) })));
+  }
+
+  // Everyone else — the default-midnight batch, exactly the pre-cycle behavior.
+  const cycledKeys = [...cycleGroups.values()].flat();
+  if (opts?.unitKeys) {
+    const remainder = opts.unitKeys.filter((k) => !cycledKeys.includes(k));
+    if (remainder.length > 0) reports.push(...(await generateDailyReportWorkbooks(log, { unitKeys: remainder })));
+  } else {
+    reports.push(
+      ...(await generateDailyReportWorkbooks(log, { excludeUnitKeys: [...(opts?.excludeUnitKeys ?? []), ...cycledKeys] })),
+    );
+  }
+  return reports;
+}
+
+/**
  * One report file (and one pending email) per unit — see generateDailyReportWorkbooks. Each
  * unit's email goes to that unit's designated recipients (<UNIT>_DAILY_RECIPIENTS, falling back
  * to the shared DAILY_REPORT_RECIPIENTS — see getDailyRecipientsForUnit). `opts` restricts which
@@ -168,7 +213,7 @@ async function generateDaily(
   }
   let reports;
   try {
-    reports = await generateDailyReportWorkbooks((p) => console.log(`[daily] ${p.label}`), opts);
+    reports = await generateDailyWithCycles(opts);
   } catch (err) {
     await logReport({
       reportType: 'daily',
@@ -511,8 +556,101 @@ async function runDailyStatsIngestSafe(): Promise<void> {
   }
 }
 
-/** The two client-defined weekly categories (each its own parent unit in the report). */
-const WEEKLY_CATEGORIES = ['Refinery', 'Petchem'];
+// ---------------------------------------------------------------------------
+// Schedule reconciler — makes invocation (send) times live-editable
+// ---------------------------------------------------------------------------
+//
+// Send times used to be fixed at boot (.env only). The admin UI now writes send-time / cycle-time
+// overrides into report-overrides.txt, so the scheduler re-derives the cron groups from
+// (env + overrides) every RECONCILE_INTERVAL_MS and starts/stops jobs to match — an edited time
+// takes effect within a minute, no restart, the same fire-time semantics recipients have.
+//
+// Jobs are keyed purely by cron; MEMBERSHIP (which units/categories fire on that cron) is
+// recomputed fresh at generation time, so a unit moving between two existing crons needs no job
+// churn at all. A retired job soft-stops: an occurrence already generating still completes its
+// send (see scheduleReport.stop()), and the shared per-job-name occurrence guard prevents a
+// stopped+recreated job from double-sending. Edits landing inside a job's ~15-min generate->send
+// window apply from the next occurrence.
+
+const RECONCILE_INTERVAL_MS = 60_000;
+
+const activeDailyJobs = new Map<string, ReturnType<typeof scheduleReport>>();
+const activeWeeklyJobs = new Map<string, ReturnType<typeof scheduleReport>>();
+
+/** Generates for whichever units resolve to `cron` AT FIRE TIME (membership never goes stale). */
+async function generateDailyForCron(occ: Date, cron: string): Promise<PendingEmail[]> {
+  const groups = buildDailyCronGroups(await loadOverrides());
+  const group = groups.get(cron);
+  if (!group) {
+    console.log(`[scheduler] daily@${cron}: no units resolve to this cron anymore — nothing to generate.`);
+    return [];
+  }
+  if (group.isDefault) {
+    // The catch-all batch: everyone except units that now fire on some other cron (device-tag-only
+    // units are not in any group's unitKeys and so always ride with the default job — as always).
+    const excludeUnitKeys = [...groups.values()].filter((g) => !g.isDefault).flatMap((g) => g.unitKeys);
+    return generateDaily(occ, { excludeUnitKeys });
+  }
+  return generateDaily(occ, { unitKeys: group.unitKeys });
+}
+
+/** Generates for whichever weekly categories resolve to `cron` at fire time. */
+async function generateWeeklyForCron(occ: Date, cron: string): Promise<PendingEmail[]> {
+  const groups = buildWeeklyCronGroups(await loadOverrides());
+  const group = groups.get(cron);
+  if (!group) {
+    console.log(`[scheduler] weekly@${cron}: no categories resolve to this cron anymore — nothing to generate.`);
+    return [];
+  }
+  return generateWeekly(occ, { categories: group.categories });
+}
+
+/** Diffs the live (env + overrides) cron set against the running jobs and starts/stops to match. */
+async function reconcileSchedules(): Promise<void> {
+  const overrides = await loadOverrides();
+
+  const desiredDaily = buildDailyCronGroups(overrides);
+  for (const [cron, job] of activeDailyJobs) {
+    if (!desiredDaily.has(cron)) {
+      console.log(`[scheduler] Retiring daily job @ "${cron}" (send time edited away).`);
+      job.stop();
+      activeDailyJobs.delete(cron);
+    }
+  }
+  for (const [cron, group] of desiredDaily) {
+    if (activeDailyJobs.has(cron)) continue;
+    console.log(
+      `[scheduler] Daily @ "${cron}"${group.isDefault ? ' (shared default)' : ` for ${group.unitKeys.join(', ')}`}.`,
+    );
+    activeDailyJobs.set(
+      cron,
+      scheduleReport(`daily@${cron}`, cron, (occ) => generateDailyForCron(occ, cron), sendPendingList),
+    );
+  }
+  if (desiredDaily.size === 0 && activeDailyJobs.size === 0) {
+    console.warn('[scheduler] No daily schedule configured — set <UNIT>_DAILY_TIME or DAILY_REPORT_TIME.');
+  }
+
+  const desiredWeekly = buildWeeklyCronGroups(overrides);
+  for (const [cron, job] of activeWeeklyJobs) {
+    if (!desiredWeekly.has(cron)) {
+      console.log(`[scheduler] Retiring weekly job @ "${cron}" (send time edited away).`);
+      job.stop();
+      activeWeeklyJobs.delete(cron);
+    }
+  }
+  for (const [cron, group] of desiredWeekly) {
+    if (activeWeeklyJobs.has(cron)) continue;
+    console.log(`[scheduler] Weekly @ "${cron}" for ${group.categories.join(', ')}.`);
+    activeWeeklyJobs.set(
+      cron,
+      scheduleReport(`weekly@${cron}`, cron, (occ) => generateWeeklyForCron(occ, cron), sendPendingList),
+    );
+  }
+  if (desiredWeekly.size === 0 && activeWeeklyJobs.size === 0) {
+    console.warn('[scheduler] No weekly schedule configured — set <CATEGORY>_WEEKLY_DAY/TIME or WEEKLY_REPORT_DAY/TIME.');
+  }
+}
 
 async function main() {
   startFileServer();
@@ -533,43 +671,13 @@ async function main() {
     console.log('[scheduler] Daily-stats cache DISABLED — pre-ingest not scheduled (reports will live-sweep).');
   }
 
-  // --- Weekly: each category on its own <CATEGORY>_WEEKLY_DAY/TIME if set, else grouped under
-  // the shared WEEKLY_REPORT_DAY/TIME.
-  const weeklyDefaultCategories: string[] = [];
-  for (const category of WEEKLY_CATEGORIES) {
-    const sched = getWeeklyCategorySchedule(category);
-    if (sched) {
-      console.log(`[scheduler] Weekly ${category}: individual schedule (${sched.cron}).`);
-      scheduleReport(`weekly:${category}`, sched.cron, (occ) => generateWeekly(occ, { categories: [category] }), sendPendingList);
-    } else {
-      weeklyDefaultCategories.push(category);
-    }
-  }
-  const weeklyDefaultCron = getWeeklyDefaultCron();
-  if (weeklyDefaultCategories.length > 0 && weeklyDefaultCron) {
-    console.log(`[scheduler] Weekly ${weeklyDefaultCategories.join(', ')}: shared schedule (${weeklyDefaultCron}).`);
-    scheduleReport('weekly', weeklyDefaultCron, (occ) => generateWeekly(occ, { categories: weeklyDefaultCategories }), sendPendingList);
-  } else if (weeklyDefaultCategories.length > 0) {
-    console.warn(
-      `[scheduler] No weekly schedule for ${weeklyDefaultCategories.join(', ')} — set <CATEGORY>_WEEKLY_DAY/TIME or WEEKLY_REPORT_DAY/TIME.`,
-    );
-  }
-
-  // --- Daily: each unit with its own <UNIT>_DAILY_TIME is scheduled individually; every other
-  // unit is generated together by the shared DAILY_REPORT_TIME job.
-  const unitSchedules = getDailyUnitSchedules();
-  for (const s of unitSchedules) {
-    console.log(`[scheduler] Daily ${s.key}: individual schedule (${s.cron}).`);
-    scheduleReport(`daily:${s.key}`, s.cron, (occ) => generateDaily(occ, { unitKeys: [s.key] }), sendPendingList);
-  }
-  const dailyDefaultCron = getDailyDefaultCron();
-  if (dailyDefaultCron) {
-    const excludeUnitKeys = unitSchedules.map((s) => s.key);
-    console.log(`[scheduler] Daily (all other units): shared schedule (${dailyDefaultCron}).`);
-    scheduleReport('daily', dailyDefaultCron, (occ) => generateDaily(occ, { excludeUnitKeys }), sendPendingList);
-  } else if (unitSchedules.length === 0) {
-    console.warn('[scheduler] No daily schedule configured — set <UNIT>_DAILY_TIME or DAILY_REPORT_TIME.');
-  }
+  // --- Daily + weekly jobs: derived from .env LAYERED WITH the overrides file and re-reconciled
+  // every minute, so send-time edits from the admin UI apply without a restart (see the
+  // reconciler block above).
+  await reconcileSchedules();
+  setInterval(() => {
+    reconcileSchedules().catch((err) => console.error('[scheduler] Reconcile failed (keeping current jobs):', err));
+  }, RECONCILE_INTERVAL_MS);
 
   console.log('[scheduler] Running. Press Ctrl+C to stop.');
 }

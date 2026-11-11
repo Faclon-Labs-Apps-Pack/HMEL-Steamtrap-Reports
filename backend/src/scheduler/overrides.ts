@@ -19,6 +19,9 @@ import { OVERRIDES_FILE, envKey } from '../config';
  *   PAUSE: CPP_575                               pause one section (env-key form)
  *   CPP_575_DAILY_RECIPIENTS: a@x.in, b@y.in     replace that section's daily recipient list
  *   REFINERY_WEEKLY_RECIPIENTS: a@x.in           replace a weekly category's recipient list
+ *   CPP_575_DAILY_TIME: 09:00                    that unit's daily invocation (send) time, IST
+ *   REFINERY_WEEKLY_TIME: 09:30                  a weekly category's send time (its day stays as configured)
+ *   CPP_575_DAILY_CYCLE: 06:00:00                that unit's data day runs 06:00 -> 06:00 (default 00:00:00)
  */
 
 export interface OverrideError {
@@ -35,18 +38,46 @@ export interface Overrides {
   recipients: Map<string, string[]>;
   /** Full CC-list replacements, keyed like the env vars: "CPP_575_DAILY_CC". */
   cc: Map<string, string[]>;
+  /**
+   * Invocation (send) time replacements, keyed like the env vars: "CPP_575_DAILY_TIME" /
+   * "REFINERY_WEEKLY_TIME" (and "DAILY_REPORT_TIME" as the shared-default form). Canonical HH:MM.
+   */
+  sendTimes: Map<string, string>;
+  /**
+   * Data-day boundary per daily unit, keyed "CPP_575_DAILY_CYCLE". Canonical HH:MM:SS — the daily
+   * report's 24h window runs from yesterday@cycle to today@cycle instead of midnight-to-midnight.
+   */
+  cycleTimes: Map<string, string>;
   /** Malformed lines that were skipped (fail-open) — shown in the admin UI. */
   errors: OverrideError[];
 }
 
 export function emptyOverrides(): Overrides {
-  return { pauseAll: false, pausedKeys: new Set(), recipients: new Map(), cc: new Map(), errors: [] };
+  return { pauseAll: false, pausedKeys: new Set(), recipients: new Map(), cc: new Map(), sendTimes: new Map(), cycleTimes: new Map(), errors: [] };
 }
 
 const RECIPIENTS_KEY_RE = /^[A-Z0-9_]+_(DAILY|WEEKLY)_RECIPIENTS$/;
 const CC_KEY_RE = /^[A-Z0-9_]+_(DAILY|WEEKLY)_CC$/;
+const SEND_TIME_KEY_RE = /^[A-Z0-9_]+_(DAILY|WEEKLY)_TIME$/;
+const CYCLE_KEY_RE = /^[A-Z0-9_]+_DAILY_CYCLE$/;
 // Deliberately loose — corporate addresses vary; we only guard against obvious garbage.
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const HHMM_RE = /^([01]?\d|2[0-3]):([0-5]\d)$/;
+const HHMMSS_RE = /^([01]?\d|2[0-3]):([0-5]\d)(?::([0-5]\d))?$/;
+
+/** "6:0" -> "06:00"; returns null when not a valid 24-hour HH:MM. */
+export function normalizeHHMM(value: string): string | null {
+  const m = HHMM_RE.exec(value.trim());
+  if (!m) return null;
+  return `${m[1].padStart(2, '0')}:${m[2]}`;
+}
+
+/** "6:00" / "06:00:30" -> "06:00:00" / "06:00:30"; returns null when not valid. */
+export function normalizeHHMMSS(value: string): string | null {
+  const m = HHMMSS_RE.exec(value.trim());
+  if (!m) return null;
+  return `${m[1].padStart(2, '0')}:${m[2]}:${m[3] ?? '00'}`;
+}
 
 export function parseOverrides(text: string): Overrides {
   const result = emptyOverrides();
@@ -92,6 +123,26 @@ export function parseOverrides(text: string): Overrides {
       continue;
     }
 
+    if (SEND_TIME_KEY_RE.test(key)) {
+      const time = normalizeHHMM(value);
+      if (!time) {
+        result.errors.push({ line: i + 1, text: raw.trim(), message: `${key} expects a 24-hour HH:MM time (IST), e.g. 09:00 — line ignored.` });
+        continue;
+      }
+      result.sendTimes.set(key, time);
+      continue;
+    }
+
+    if (CYCLE_KEY_RE.test(key)) {
+      const time = normalizeHHMMSS(value);
+      if (!time) {
+        result.errors.push({ line: i + 1, text: raw.trim(), message: `${key} expects a 24-hour HH:MM:SS time, e.g. 06:00:00 — line ignored.` });
+        continue;
+      }
+      result.cycleTimes.set(key, time);
+      continue;
+    }
+
     if (CC_KEY_RE.test(key)) {
       // CC may legitimately be empty (= no CC for this section), unlike the primary recipient list.
       const emails = value.split(',').map((s) => s.trim()).filter(Boolean);
@@ -107,7 +158,7 @@ export function parseOverrides(text: string): Overrides {
     result.errors.push({
       line: i + 1,
       text: raw.trim(),
-      message: `Unknown directive "${key}" — expected PAUSE or <SECTION>_DAILY_RECIPIENTS / <SECTION>_WEEKLY_RECIPIENTS / <SECTION>_DAILY_CC. Line ignored.`,
+      message: `Unknown directive "${key}" — expected PAUSE, <SECTION>_DAILY_RECIPIENTS / _WEEKLY_RECIPIENTS / _DAILY_CC, <SECTION>_DAILY_TIME / _WEEKLY_TIME, or <SECTION>_DAILY_CYCLE. Line ignored.`,
     });
   }
   return result;
@@ -153,6 +204,16 @@ export function overrideCc(ov: Overrides, sectionName: string, type: 'daily' | '
   return ov.cc.get(`${envKey(sectionName)}_${type.toUpperCase()}_CC`) ?? null;
 }
 
+/** The override invocation (send) time for a section (HH:MM IST), or null to fall back to .env. */
+export function overrideSendTime(ov: Overrides, sectionName: string, type: 'daily' | 'weekly'): string | null {
+  return ov.sendTimes.get(`${envKey(sectionName)}_${type.toUpperCase()}_TIME`) ?? null;
+}
+
+/** The override data-day cycle time for a daily unit (HH:MM:SS), or null for the 00:00:00 default. */
+export function overrideCycleTime(ov: Overrides, sectionName: string): string | null {
+  return ov.cycleTimes.get(`${envKey(sectionName)}_DAILY_CYCLE`) ?? null;
+}
+
 const FILE_HEADER = `# HMEL report overrides — edit here or in the admin UI ("Schedule Report" tab).
 # Re-read on every scheduled run; changes apply from the NEXT run, no restart needed.
 # Malformed lines are IGNORED (reports fall back to .env) and flagged in the admin UI.
@@ -162,6 +223,9 @@ const FILE_HEADER = `# HMEL report overrides — edit here or in the admin UI ("
 #   CPP_575_DAILY_RECIPIENTS: a@x.in, b@y.in    replace that section's daily recipients
 #   REFINERY_WEEKLY_RECIPIENTS: a@x.in          replace a weekly category's recipients
 #   CPP_575_DAILY_CC: mgr@x.in, mgr2@y.in       set that section's daily CC (blank = none)
+#   CPP_575_DAILY_TIME: 09:00                   send that unit's daily at 09:00 IST (instead of the shared time)
+#   REFINERY_WEEKLY_TIME: 09:30                 a weekly category's send time (its day stays as configured)
+#   CPP_575_DAILY_CYCLE: 06:00:00               that unit's data day runs 06:00 -> 06:00 (default 00:00:00)
 #
 # NOTE: structured edits from the UI rewrite this file — keep hand-written comments above this line only.
 `;
@@ -177,6 +241,12 @@ export function serializeOverrides(ov: Overrides): string {
   }
   for (const [key, emails] of [...ov.cc.entries()].sort(([a], [b]) => a.localeCompare(b))) {
     lines.push(`${key}: ${emails.join(', ')}`);
+  }
+  for (const [key, time] of [...ov.sendTimes.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+    lines.push(`${key}: ${time}`);
+  }
+  for (const [key, time] of [...ov.cycleTimes.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+    lines.push(`${key}: ${time}`);
   }
   return lines.join('\n') + '\n';
 }

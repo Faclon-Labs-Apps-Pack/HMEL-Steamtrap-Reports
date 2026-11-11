@@ -13,14 +13,20 @@ const MAX_SAFE_TIMEOUT_MS = 2_147_483_647;
 /**
  * setTimeout, but safe for delays longer than Node's ~24.86-day ceiling — chains multiple
  * setTimeout calls, each capped at the safe maximum, recursively counting down the remainder,
- * until the final leg is short enough to actually fire the callback.
+ * until the final leg is short enough to actually fire the callback. Returns a canceller
+ * (effective across the whole chain) so a re-scheduled job can disarm a not-yet-fired wait.
  */
-export function longSetTimeout(callback: () => void, delayMs: number): void {
-  if (delayMs <= MAX_SAFE_TIMEOUT_MS) {
-    setTimeout(callback, Math.max(0, delayMs));
-    return;
-  }
-  setTimeout(() => longSetTimeout(callback, delayMs - MAX_SAFE_TIMEOUT_MS), MAX_SAFE_TIMEOUT_MS);
+export function longSetTimeout(callback: () => void, delayMs: number): { cancel: () => void } {
+  let timer: ReturnType<typeof setTimeout>;
+  const arm = (remaining: number) => {
+    if (remaining <= MAX_SAFE_TIMEOUT_MS) {
+      timer = setTimeout(callback, Math.max(0, remaining));
+      return;
+    }
+    timer = setTimeout(() => arm(remaining - MAX_SAFE_TIMEOUT_MS), MAX_SAFE_TIMEOUT_MS);
+  };
+  arm(delayMs);
+  return { cancel: () => clearTimeout(timer) };
 }
 
 /**
@@ -55,15 +61,36 @@ export function nextRunTime(cron: string, now: Date = new Date()): Date {
  * IMPORTANT: rescheduling after a cycle completes must search strictly after the occurrence just
  * handled, not merely after "now" — see the note that used to be here about the immediate-refire
  * trap this avoids.
+ *
+ * Returns a handle whose `stop()` soft-cancels the job: a not-yet-started occurrence is disarmed,
+ * but an occurrence already generating (or waiting to send) COMPLETES — its pending emails are on
+ * disk and must go out — and only the rescheduling after it is suppressed. The reconciler uses
+ * this to retire a job whose cron no longer exists in the live (env + overrides) schedule.
  */
+export interface ScheduledJob {
+  stop(): void;
+}
+
+// Occurrences already generated, per job name — shared ACROSS job instances so a job stopped and
+// re-created with the same name+cron (override edited away and back within a minute) can never
+// generate/send the same occurrence twice next to the old instance's still-completing run.
+const lastGeneratedByJob = new Map<string, number>();
+
 export function scheduleReport<T>(
   name: string,
   cron: string,
   generate: (occurrence: Date) => Promise<T>,
   send: (payload: T) => Promise<void>,
-): void {
+): ScheduledJob {
+  let stopped = false;
+  // The canceller for the pre-generate wait — the only phase that is safe to disarm outright.
+  let armedWait: { cancel: () => void } | null = null;
+
   function scheduleNext(after: Date = new Date()) {
-    const occurrence = nextOccurrence(cron, after);
+    if (stopped) return;
+    // A stop()+re-create cycle can leave `after` (the shared last-generated instant) in the past
+    // relative to a NEW cron — never fire occurrences that are already over.
+    const occurrence = nextOccurrence(cron, after.getTime() > Date.now() ? after : new Date());
     const generateAt = new Date(occurrence.getTime() - LEAD_TIME_MS);
     const generateDelayMs = Math.max(0, generateAt.getTime() - Date.now());
     console.log(
@@ -71,7 +98,15 @@ export function scheduleReport<T>(
         `(in ${Math.round(generateDelayMs / 60000)} min)`,
     );
 
-    longSetTimeout(async () => {
+    armedWait = longSetTimeout(async () => {
+      armedWait = null;
+      if (stopped) return;
+      if ((lastGeneratedByJob.get(name) ?? 0) >= occurrence.getTime()) {
+        // Another instance of this job already handled this occurrence — just move on.
+        scheduleNext(occurrence);
+        return;
+      }
+      lastGeneratedByJob.set(name, occurrence.getTime());
       console.log(`[scheduler:${name}] Generating…`);
       let payload: T;
       try {
@@ -100,4 +135,10 @@ export function scheduleReport<T>(
   }
 
   scheduleNext();
+  return {
+    stop() {
+      stopped = true;
+      armedWait?.cancel();
+    },
+  };
 }

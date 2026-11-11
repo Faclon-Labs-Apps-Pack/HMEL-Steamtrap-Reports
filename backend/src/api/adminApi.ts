@@ -10,6 +10,7 @@ import {
   getDailyRecipientsForUnit,
   getWeeklyRecipientsForCategory,
   getDailyCcForUnit,
+  dailyUnitKeysFromEnv,
 } from '../config';
 import {
   loadOverrides,
@@ -20,8 +21,11 @@ import {
   isPaused,
   overrideRecipients,
   overrideCc,
+  normalizeHHMM,
+  normalizeHHMMSS,
   type Overrides,
 } from '../scheduler/overrides';
+import { effectiveDailySendTime, effectiveCycleTime, DEFAULT_CYCLE_TIME } from '../scheduler/effectiveSchedule';
 import { generateRangeAnalysisWorkbooks } from '../reportGeneration/generateRangeAnalysisReport';
 import { saveWorkbook } from '../reportGeneration/saveWorkbook';
 import { derivePlantCategory } from '../lib/plantCategory';
@@ -81,16 +85,6 @@ async function readReportLog(): Promise<LogEntry[]> {
 
 const WEEKLY_CATEGORIES = ['Refinery', 'Petchem'];
 
-/** Daily unit env-keys: every <KEY>_DAILY_RECIPIENTS / <KEY>_DAILY_TIME var defines a unit. */
-function dailyUnitKeysFromEnv(): string[] {
-  const keys = new Set<string>();
-  for (const name of Object.keys(process.env)) {
-    const m = /^(.+)_DAILY_(RECIPIENTS|TIME)$/.exec(name);
-    if (m) keys.add(m[1]);
-  }
-  return [...keys].sort();
-}
-
 /** Best-effort display name per env-key, learned from the send-log's real section names. */
 async function displayNamesByKey(): Promise<Map<string, string>> {
   const map = new Map<string, string>();
@@ -105,6 +99,12 @@ interface ScheduleView {
   name: string;
   type: 'daily' | 'weekly';
   sendTime: string;
+  /** True when the invocation (send) time comes from report-overrides.txt rather than .env. */
+  sendTimeOverridden: boolean;
+  /** Daily only: the data-day boundary, HH:MM:SS (window = yesterday@cycle -> today@cycle). */
+  cycleTime?: string;
+  /** True when the cycle time comes from report-overrides.txt (default is 00:00:00). */
+  cycleTimeOverridden?: boolean;
   paused: boolean;
   recipients: string[];
   /** True when the recipient list comes from report-overrides.txt rather than .env. */
@@ -138,7 +138,10 @@ async function buildSchedules(ov: Overrides): Promise<ScheduleView[]> {
       key,
       name,
       type: 'daily',
-      sendTime: process.env[`${key}_DAILY_TIME`]?.trim() || process.env.DAILY_REPORT_TIME?.trim() || '(not scheduled)',
+      sendTime: effectiveDailySendTime(key, ov) ?? '(not scheduled)',
+      sendTimeOverridden: ov.sendTimes.has(`${key}_DAILY_TIME`),
+      cycleTime: effectiveCycleTime(key, ov),
+      cycleTimeOverridden: ov.cycleTimes.has(`${key}_DAILY_CYCLE`),
       paused: isPaused(ov, key),
       recipients: ovRecipients ?? getDailyRecipientsForUnit(name),
       recipientsOverridden: ovRecipients !== null,
@@ -150,13 +153,16 @@ async function buildSchedules(ov: Overrides): Promise<ScheduleView[]> {
   for (const category of WEEKLY_CATEGORIES) {
     const key = envKey(category);
     const day = process.env[`${key}_WEEKLY_DAY`]?.trim() || process.env.WEEKLY_REPORT_DAY?.trim();
-    const time = process.env[`${key}_WEEKLY_TIME`]?.trim() || process.env.WEEKLY_REPORT_TIME?.trim();
+    const time =
+      ov.sendTimes.get(`${key}_WEEKLY_TIME`) ??
+      (process.env[`${key}_WEEKLY_TIME`]?.trim() || process.env.WEEKLY_REPORT_TIME?.trim());
     const ovRecipients = overrideRecipients(ov, key, 'weekly');
     schedules.push({
       key,
       name: category,
       type: 'weekly',
       sendTime: day && time ? `day ${day} @ ${time}` : '(not scheduled)',
+      sendTimeOverridden: ov.sendTimes.has(`${key}_WEEKLY_TIME`),
       paused: isPaused(ov, key),
       recipients: ovRecipients ?? getWeeklyRecipientsForCategory(category),
       recipientsOverridden: ovRecipients !== null,
@@ -609,6 +615,62 @@ export function createAdminApiRouter(): Router {
       }
       await mutateOverrides((ov) => void ov.cc.set(overrideKey, emails));
       res.json({ ok: true, cc: emails });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  /**
+   * Set/clear a section's invocation (send) time and — daily only — its data-day cycle time.
+   * Fields left out of the body are untouched; null reverts that field to its default (.env send
+   * time / 00:00:00 cycle). Saved to the overrides file; the scheduler reconciles within a minute,
+   * so an edited send time applies without a restart.
+   */
+  router.put('/schedules/:key/times', async (req, res) => {
+    const { type, sendTime, cycleTime } = req.body ?? {};
+    if (type !== 'daily' && type !== 'weekly') {
+      res.status(400).json({ error: 'type must be "daily" or "weekly".' });
+      return;
+    }
+    if (type === 'weekly' && cycleTime !== undefined) {
+      res.status(400).json({ error: 'Weekly reports cover the full previous week — they have no cycle time.' });
+      return;
+    }
+    const key = envKey(req.params.key);
+    const sendKey = `${key}_${(type as string).toUpperCase()}_TIME`;
+    const cycleKey = `${key}_DAILY_CYCLE`;
+
+    const normalizedSend = typeof sendTime === 'string' ? normalizeHHMM(sendTime) : null;
+    if (typeof sendTime === 'string' && !normalizedSend) {
+      res.status(400).json({ error: `Invalid send time "${sendTime}" — expected 24-hour HH:MM, e.g. 09:00.` });
+      return;
+    }
+    const normalizedCycle = typeof cycleTime === 'string' ? normalizeHHMMSS(cycleTime) : null;
+    if (typeof cycleTime === 'string' && !normalizedCycle) {
+      res.status(400).json({ error: `Invalid cycle time "${cycleTime}" — expected HH:MM:SS, e.g. 06:00:00.` });
+      return;
+    }
+    if (sendTime !== undefined && sendTime !== null && typeof sendTime !== 'string') {
+      res.status(400).json({ error: 'sendTime must be an "HH:MM" string, or null to revert to .env.' });
+      return;
+    }
+    if (cycleTime !== undefined && cycleTime !== null && typeof cycleTime !== 'string') {
+      res.status(400).json({ error: 'cycleTime must be an "HH:MM:SS" string, or null to revert to 00:00:00.' });
+      return;
+    }
+
+    try {
+      await mutateOverrides((ov) => {
+        if (sendTime === null) ov.sendTimes.delete(sendKey);
+        else if (normalizedSend) ov.sendTimes.set(sendKey, normalizedSend);
+        if (cycleTime === null) ov.cycleTimes.delete(cycleKey);
+        // A cycle explicitly set back to midnight IS the default — store nothing, like a revert.
+        else if (normalizedCycle) {
+          if (normalizedCycle === DEFAULT_CYCLE_TIME) ov.cycleTimes.delete(cycleKey);
+          else ov.cycleTimes.set(cycleKey, normalizedCycle);
+        }
+      });
+      res.json({ ok: true, sendTime: normalizedSend ?? undefined, cycleTime: normalizedCycle ?? undefined });
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }
