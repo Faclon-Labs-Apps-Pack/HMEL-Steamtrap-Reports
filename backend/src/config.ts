@@ -75,12 +75,12 @@ export const FRONTEND_DIST_DIR = process.env.FRONTEND_DIST_DIR ?? new URL('../..
 /**
  * How many minutes before the configured schedule time the report should be generated (the
  * email itself still goes out exactly AT the schedule time — see `scheduler/scheduleReport.ts`).
- * Defaults to 15. E.g. scheduled for 10:10 with REPORT_LEAD_TIME_MINUTES=2 -> generation starts
- * at 10:08, email sends at 10:10.
+ * Defaults to 60 (1 hour before, per client request 2026-11-11; was 15). E.g. scheduled for 10:10
+ * with REPORT_LEAD_TIME_MINUTES=2 -> generation starts at 10:08, email sends at 10:10.
  */
 export const REPORT_LEAD_TIME_MINUTES = (() => {
   const raw = process.env.REPORT_LEAD_TIME_MINUTES;
-  if (!raw) return 15;
+  if (!raw) return 60;
   const minutes = Number(raw);
   if (!Number.isFinite(minutes) || minutes < 0) {
     throw new Error(`Invalid REPORT_LEAD_TIME_MINUTES "${raw}" — expected a non-negative number of minutes.`);

@@ -56,6 +56,8 @@ export interface OverrideError {
 export interface SchedulesResponse {
   pauseAll: boolean;
   overrideErrors: OverrideError[];
+  /** How many minutes before each send time generation starts (REPORT_LEAD_TIME_MINUTES). */
+  leadTimeMinutes?: number;
   schedules: Schedule[];
 }
 

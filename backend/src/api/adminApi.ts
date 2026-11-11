@@ -11,6 +11,7 @@ import {
   getWeeklyRecipientsForCategory,
   getDailyCcForUnit,
   dailyUnitKeysFromEnv,
+  REPORT_LEAD_TIME_MINUTES,
 } from '../config';
 import {
   loadOverrides,
@@ -502,6 +503,8 @@ export function createAdminApiRouter(): Router {
       res.json({
         pauseAll: ov.pauseAll,
         overrideErrors: ov.errors,
+        // How long before each send time generation starts — the UI states it in the schedule editor.
+        leadTimeMinutes: REPORT_LEAD_TIME_MINUTES,
         schedules: await buildSchedules(ov),
       });
     } catch (err) {

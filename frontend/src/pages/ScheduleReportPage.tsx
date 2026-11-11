@@ -191,12 +191,21 @@ function extractHHMM(sendTime: string): string {
  * yesterday@cycle -> today@cycle (default 00:00:00 = the previous calendar day). Saves to the
  * overrides file; the scheduler reconciles send-time changes within a minute, no restart.
  */
+/** "60" -> "1 hour", "90" -> "90 minutes" — for the generation-lead note in the editor. */
+function formatLead(minutes: number): string {
+  if (minutes === 60) return '1 hour';
+  if (minutes % 60 === 0) return `${minutes / 60} hours`;
+  return `${minutes} minutes`;
+}
+
 function TimesModal({
   row,
+  leadTimeMinutes,
   onSaved,
   onClose,
 }: {
   row: ScheduleRow;
+  leadTimeMinutes: number;
   onSaved: () => void;
   onClose: () => void;
 }) {
@@ -226,7 +235,7 @@ function TimesModal({
       onClose={onClose}
       header={
         <ModalHeader
-          title={`Edit times — ${row.name}`}
+          title={`Edit schedule — ${row.name}`}
           subtitle={`${isDaily ? 'Daily' : 'Weekly'} report${row.sendTimeOverridden ? ' · send time overridden' : ''}${row.cycleTimeOverridden ? ' · cycle overridden' : ''}`}
           onClose={onClose}
         />
@@ -260,7 +269,7 @@ function TimesModal({
               style={{ font: 'inherit', fontSize: 14, padding: '8px 10px', border: '1px solid var(--ui-border)', borderRadius: 7 }}
             />
             <p className="BodySmallRegular ui-muted" style={{ margin: '6px 0 0' }}>
-              When the report email goes out{weeklyDay ? ` (its day stays ${weeklyDay})` : ' each day'}. Generation starts ~15 minutes earlier.
+              When the report email goes out{weeklyDay ? ` (its day stays ${weeklyDay})` : ' each day'}. Generation starts {formatLead(leadTimeMinutes)} earlier.
             </p>
             {row.sendTimeOverridden && (
               <div style={{ marginTop: 6 }}>
@@ -548,7 +557,7 @@ export function ScheduleReportPage() {
                             label={row.paused ? 'Resume' : 'Pause'}
                             onClick={() => void togglePause(row)}
                           />
-                          <Button variant="Gray" size="XSmall" label="Edit times" onClick={() => setEditingKey(row.id)} />
+                          <Button variant="Gray" size="XSmall" label="Edit schedule" onClick={() => setEditingKey(row.id)} />
                           <Button variant="Gray" size="XSmall" label="Edit recipients" onClick={() => setEditingRecipientsKey(row.id)} />
                         </div>
                       </TableCell>
@@ -570,11 +579,12 @@ export function ScheduleReportPage() {
       {editingRow && (
         <TimesModal
           row={editingRow}
+          leadTimeMinutes={data?.leadTimeMinutes ?? 60}
           onClose={() => setEditingKey(null)}
           onSaved={() => {
             setEditingKey(null);
             void load();
-            flash(`Times for ${editingRow.name} saved — the scheduler picks up the change within a minute.`);
+            flash(`Schedule for ${editingRow.name} saved — the scheduler picks up the change within a minute.`);
           }}
         />
       )}
