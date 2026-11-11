@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import {
   Table,
   TableBody,
@@ -51,10 +51,12 @@ const LAST_RUN_COLOR: Record<string, 'Positive' | 'Negative' | 'Notice' | 'Neutr
  */
 function RecipientsModal({
   row,
+  className,
   onSaved,
   onClose,
 }: {
   row: ScheduleRow;
+  className?: string;
   onSaved: () => void;
   onClose: () => void;
 }) {
@@ -100,6 +102,7 @@ function RecipientsModal({
     <Modal
       isOpen
       size="Medium"
+      className={className}
       onClose={onClose}
       header={
         <ModalHeader
@@ -201,11 +204,13 @@ function formatLead(minutes: number): string {
 function TimesModal({
   row,
   leadTimeMinutes,
+  className,
   onSaved,
   onClose,
 }: {
   row: ScheduleRow;
   leadTimeMinutes: number;
+  className?: string;
   onSaved: () => void;
   onClose: () => void;
 }) {
@@ -232,6 +237,7 @@ function TimesModal({
     <Modal
       isOpen
       size="Small"
+      className={className}
       onClose={onClose}
       header={
         <ModalHeader
@@ -366,6 +372,44 @@ export function ScheduleReportPage() {
   const [error, setError] = useState<string | null>(null);
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const [editingRecipientsKey, setEditingRecipientsKey] = useState<string | null>(null);
+
+  // Both editor modals open with a LINEAR grow-out-of-the-button animation and shrink back into
+  // it on close (same origin-aware pattern as the Generate tab's date picker). The trigger button
+  // is remembered so the close can re-measure it (the table may have scrolled meanwhile), and the
+  // modal stays mounted through the `modalClosing` phase so the exit animation can play — the sdk
+  // Modal unmounts instantly otherwise.
+  const modalTriggerRef = useRef<HTMLElement | null>(null);
+  const [modalClosing, setModalClosing] = useState(false);
+
+  const setModalOrigin = () => {
+    const t = modalTriggerRef.current;
+    if (!t || !t.isConnected) return;
+    const r = t.getBoundingClientRect();
+    const root = document.documentElement.style;
+    root.setProperty('--modal-dx', `${r.x + r.width / 2 - window.innerWidth / 2}px`);
+    root.setProperty('--modal-dy', `${r.y + r.height / 2 - window.innerHeight / 2}px`);
+  };
+
+  function openEditor(e: ReactMouseEvent<HTMLElement>, open: () => void) {
+    modalTriggerRef.current = e.currentTarget as HTMLElement;
+    setModalOrigin();
+    setModalClosing(false);
+    open();
+  }
+
+  /** Plays the shrink-back animation, THEN unmounts (cleanup) and runs any after-close work. */
+  function closeEditor(cleanup: () => void, after?: () => void) {
+    if (modalClosing) return;
+    setModalOrigin();
+    setModalClosing(true);
+    window.setTimeout(() => {
+      setModalClosing(false);
+      cleanup();
+      after?.();
+    }, 210);
+  }
+
+  const editorModalClass = `ui-anim-modal${modalClosing ? ' is-closing' : ''}`;
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [showPauseAll, setShowPauseAll] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -557,8 +601,8 @@ export function ScheduleReportPage() {
                             label={row.paused ? 'Resume' : 'Pause'}
                             onClick={() => void togglePause(row)}
                           />
-                          <Button variant="Gray" size="XSmall" label="Edit schedule" onClick={() => setEditingKey(row.id)} />
-                          <Button variant="Gray" size="XSmall" label="Edit recipients" onClick={() => setEditingRecipientsKey(row.id)} />
+                          <Button variant="Gray" size="XSmall" label="Edit schedule" onClick={(e) => openEditor(e, () => setEditingKey(row.id))} />
+                          <Button variant="Gray" size="XSmall" label="Edit recipients" onClick={(e) => openEditor(e, () => setEditingRecipientsKey(row.id))} />
                         </div>
                       </TableCell>
                     </TableRow>
@@ -580,23 +624,33 @@ export function ScheduleReportPage() {
         <TimesModal
           row={editingRow}
           leadTimeMinutes={data?.leadTimeMinutes ?? 60}
-          onClose={() => setEditingKey(null)}
-          onSaved={() => {
-            setEditingKey(null);
-            void load();
-            flash(`Schedule for ${editingRow.name} saved — the scheduler picks up the change within a minute.`);
-          }}
+          className={editorModalClass}
+          onClose={() => closeEditor(() => setEditingKey(null))}
+          onSaved={() =>
+            closeEditor(
+              () => setEditingKey(null),
+              () => {
+                void load();
+                flash(`Schedule for ${editingRow.name} saved — the scheduler picks up the change within a minute.`);
+              },
+            )
+          }
         />
       )}
       {editingRecipientsRow && (
         <RecipientsModal
           row={editingRecipientsRow}
-          onClose={() => setEditingRecipientsKey(null)}
-          onSaved={() => {
-            setEditingRecipientsKey(null);
-            void load();
-            flash(`Recipients for ${editingRecipientsRow.name} saved — applies from its next scheduled run.`);
-          }}
+          className={editorModalClass}
+          onClose={() => closeEditor(() => setEditingRecipientsKey(null))}
+          onSaved={() =>
+            closeEditor(
+              () => setEditingRecipientsKey(null),
+              () => {
+                void load();
+                flash(`Recipients for ${editingRecipientsRow.name} saved — applies from its next scheduled run.`);
+              },
+            )
+          }
         />
       )}
       {showPauseAll && data && (

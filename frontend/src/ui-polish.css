@@ -777,3 +777,41 @@ body:has(.ui-picker.is-closing) .fds-datepicker__popover {
   .ui-val-row { gap: 18px; }
   .ui-page-head h2 { font-size: 17px; }
 }
+
+/* =========================================================
+   Schedule-tab editor modals (Edit schedule / Edit recipients):
+   LINEAR grow-out-of-the-button open and shrink-back-into-it
+   close (client request 2026-11-11). --modal-dx/--modal-dy =
+   trigger button center − viewport center, set by JS at open
+   and close time. The sdk Modal centers .fds-modal with flex
+   (no base transform), so the keyframes animate to `none`.
+   The page holds the modal mounted through `.is-closing` so
+   the exit animation can play before unmount.
+   ========================================================= */
+.ui-anim-modal {
+  animation: ui-backdrop-in 180ms linear both;
+}
+.ui-anim-modal .fds-modal {
+  animation: ui-btn-modal-in 220ms linear both;
+}
+.ui-anim-modal.is-closing {
+  animation: ui-backdrop-out 180ms linear both;
+}
+.ui-anim-modal.is-closing .fds-modal {
+  animation: ui-btn-modal-out 200ms linear both;
+  pointer-events: none;
+}
+@keyframes ui-btn-modal-in {
+  from {
+    opacity: 0;
+    transform: translate(var(--modal-dx, 0px), var(--modal-dy, 0px)) scale(0.1);
+  }
+  to { opacity: 1; transform: none; }
+}
+@keyframes ui-btn-modal-out {
+  from { opacity: 1; transform: none; }
+  to {
+    opacity: 0;
+    transform: translate(var(--modal-dx, 0px), var(--modal-dy, 0px)) scale(0.08);
+  }
+}
