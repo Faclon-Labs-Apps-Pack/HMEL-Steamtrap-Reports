@@ -385,7 +385,8 @@ export function ReportLogTable({
                     <TableHeaderCell>Section</TableHeaderCell>
                     <TableHeaderCell>Status</TableHeaderCell>
                     <TableHeaderCell>Report File</TableHeaderCell>
-                    <TableHeaderCell>Recipients</TableHeaderCell>
+                    {/* On-demand generated reports are never emailed — no Recipients column there. */}
+                    {mode !== 'generated' && <TableHeaderCell>Recipients</TableHeaderCell>}
                     <TableHeaderCell>Details</TableHeaderCell>
                     <TableHeaderCell>Download</TableHeaderCell>
                   </TableHeaderRow>
@@ -400,9 +401,11 @@ export function ReportLogTable({
                         <Badge size="Small" color={STATUS_COLOR[row.status] ?? 'Neutral'} label={row.status} />
                       </TableCell>
                       <TableCell contentType="text"><CellText title={row.fileName ?? '—'} /></TableCell>
-                      <TableCell contentType="text">
-                        <CellText title={row.recipients && row.recipients.length > 0 ? `${row.recipients.length} recipient(s)` : '—'} />
-                      </TableCell>
+                      {mode !== 'generated' && (
+                        <TableCell contentType="text">
+                          <CellText title={row.recipients && row.recipients.length > 0 ? `${row.recipients.length} recipient(s)` : '—'} />
+                        </TableCell>
+                      )}
                       <TableCell contentType="text">
                         <Button variant="Gray" size="XSmall" label="View details" onClick={() => setDetailRow(row)} />
                       </TableCell>

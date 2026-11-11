@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   Table,
   TableBody,
@@ -12,7 +12,6 @@ import {
 import { Badge } from '@faclon-labs/design-sdk';
 import { Button } from '@faclon-labs/design-sdk/Button';
 import { Modal, ModalHeader, ModalBody, ModalFooter } from '@faclon-labs/design-sdk/Modal';
-import { Upload } from 'lucide-react';
 import {
   fetchSchedules,
   pauseAll,
@@ -21,12 +20,8 @@ import {
   resumeSection,
   saveRecipients,
   saveCc,
-  validateOverrides,
-  saveOverrides,
-  downloadOverridesExport,
   type Schedule,
   type SchedulesResponse,
-  type OverridesValidation,
 } from '../services/adminApi';
 
 interface ScheduleRow extends Schedule {
@@ -232,206 +227,12 @@ function PauseAllModal({
   );
 }
 
-/**
- * Guided override import: upload (drag-drop or browse) → server-side dry-run validation →
- * review what would change → apply. Nothing is written until Apply, and invalid lines are
- * ignored by the scheduler even if applied (fail-open backend behavior).
- */
-function ImportModal({ onApplied, onClose }: { onApplied: () => void; onClose: () => void }) {
-  const fileRef = useRef<HTMLInputElement>(null);
-  const [fileName, setFileName] = useState<string | null>(null);
-  const [fileSize, setFileSize] = useState(0);
-  const [pending, setPending] = useState<{ text: string; preview: OverridesValidation } | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [applying, setApplying] = useState(false);
-  const [dragOver, setDragOver] = useState(false);
-
-  async function handleFile(file: File) {
-    setError(null);
-    setPending(null);
-    try {
-      const text = await file.text();
-      const preview = await validateOverrides(text);
-      setFileName(file.name);
-      setFileSize(file.size);
-      setPending({ text, preview });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'File validation failed.');
-    }
-  }
-
-  async function apply() {
-    if (!pending) return;
-    setApplying(true);
-    setError(null);
-    try {
-      await saveOverrides(pending.text);
-      onApplied();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unable to apply the overrides.');
-      setApplying(false);
-    }
-  }
-
-  const validCount = pending
-    ? (pending.preview.pauseAll ? 1 : 0) +
-      pending.preview.pausedKeys.length +
-      Object.keys(pending.preview.recipients).length +
-      Object.keys(pending.preview.cc ?? {}).length
-    : 0;
-
-  return (
-    <Modal
-      isOpen
-      size="Medium"
-      onClose={onClose}
-      header={
-        <ModalHeader
-          title="Import schedule overrides"
-          subtitle="Upload an overrides file to review changes before they are applied."
-          onClose={onClose}
-        />
-      }
-      footer={
-        <ModalFooter
-          primaryAction={
-            <Button
-              variant="Primary"
-              isLoading={applying}
-              isDisabled={!pending}
-              label={pending ? `Apply ${validCount} change${validCount === 1 ? '' : 's'}` : 'Apply'}
-              onClick={() => void apply()}
-            />
-          }
-          secondaryAction={<Button variant="Secondary" label="Cancel" onClick={onClose} />}
-        />
-      }
-    >
-      <ModalBody>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <p className="BodySmallRegular ui-muted" style={{ margin: 0 }}>
-            Start from the current configuration:{' '}
-            <a
-              href="#"
-              onClick={(e) => {
-                e.preventDefault();
-                void downloadOverridesExport().catch(() => {});
-              }}
-            >
-              export overrides (.txt)
-            </a>
-            , edit it in any text editor, then upload it here.
-          </p>
-
-          <input
-            ref={fileRef}
-            type="file"
-            accept=".txt,text/plain"
-            style={{ display: 'none' }}
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) void handleFile(f);
-              e.target.value = '';
-            }}
-          />
-          <div
-            className={`ui-dropzone${dragOver ? ' is-over' : ''}`}
-            role="button"
-            tabIndex={0}
-            aria-label="Upload overrides file"
-            onClick={() => fileRef.current?.click()}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') fileRef.current?.click();
-            }}
-            onDragOver={(e) => {
-              e.preventDefault();
-              setDragOver(true);
-            }}
-            onDragLeave={() => setDragOver(false)}
-            onDrop={(e) => {
-              e.preventDefault();
-              setDragOver(false);
-              const f = e.dataTransfer.files?.[0];
-              if (f) void handleFile(f);
-            }}
-          >
-            <Upload size={18} aria-hidden />
-            {fileName ? (
-              <span>
-                <strong>{fileName}</strong> ({(fileSize / 1024).toFixed(1)} KB) — click to replace
-              </span>
-            ) : (
-              <span>Drop your file here, or <span style={{ color: 'var(--ui-blue)' }}>browse files</span> (.txt)</span>
-            )}
-          </div>
-
-          {error && (
-            <div className="ui-alert is-red" style={{ margin: 0 }}>
-              <strong>File validation failed.</strong> {error}
-            </div>
-          )}
-
-          {pending && (
-            <div className="ui-fade-in">
-              <div className="ui-val-row">
-                <div className={`ui-val${validCount > 0 ? ' is-green' : ''}`}>
-                  <b>{validCount}</b>Valid changes
-                </div>
-                <div className={`ui-val${pending.preview.errors.length > 0 ? ' is-red' : ''}`}>
-                  <b>{pending.preview.errors.length}</b>Invalid lines
-                </div>
-              </div>
-
-              <div className="BodySmallRegular" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                <div>
-                  <span className="ui-muted">Pause ALL reports: </span>
-                  <strong style={{ color: pending.preview.pauseAll ? 'var(--ui-red)' : undefined }}>
-                    {pending.preview.pauseAll ? 'YES' : 'no'}
-                  </strong>
-                </div>
-                <div>
-                  <span className="ui-muted">Paused sections: </span>
-                  {pending.preview.pausedKeys.length > 0 ? pending.preview.pausedKeys.join(', ') : 'none'}
-                </div>
-                <div>
-                  <span className="ui-muted">Recipient overrides: </span>
-                  {Object.keys(pending.preview.recipients).length > 0
-                    ? Object.entries(pending.preview.recipients).map(([k, v]) => `${k} (${v.length})`).join('; ')
-                    : 'none'}
-                </div>
-                <div>
-                  <span className="ui-muted">CC overrides: </span>
-                  {Object.keys(pending.preview.cc ?? {}).length > 0
-                    ? Object.entries(pending.preview.cc ?? {}).map(([k, v]) => `${k} (${v.length})`).join('; ')
-                    : 'none'}
-                </div>
-              </div>
-
-              {pending.preview.errors.length > 0 && (
-                <div className="ui-alert is-amber" style={{ margin: '10px 0 0' }}>
-                  These lines are invalid and will be IGNORED (reports fall back to .env for them):
-                  <ul>
-                    {pending.preview.errors.map((e) => (
-                      <li key={e.line}>line {e.line}: “{e.text}” — {e.message}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      </ModalBody>
-    </Modal>
-  );
-}
-
 export function ScheduleReportPage() {
   const [data, setData] = useState<SchedulesResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const [busyKey, setBusyKey] = useState<string | null>(null);
-  const [showImport, setShowImport] = useState(false);
   const [showPauseAll, setShowPauseAll] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -496,14 +297,9 @@ export function ScheduleReportPage() {
           <h2>Scheduled Reports</h2>
           <p className="desc">Manage report schedules, recipients, and delivery settings for each section.</p>
         </div>
+        {/* Export/Import overrides buttons removed per client request 2026-11-11 — the backend
+            /api/overrides endpoints remain, so the UI can be re-added if ever needed. */}
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <Button
-            variant="Secondary"
-            size="Small"
-            label="Export overrides"
-            onClick={() => void downloadOverridesExport().catch((err) => setError(err instanceof Error ? err.message : 'Export failed.'))}
-          />
-          <Button variant="Secondary" size="Small" label="Import overrides" onClick={() => setShowImport(true)} />
           {data && (
             <Button
               variant={data.pauseAll ? 'Primary' : 'Secondary'}
@@ -640,16 +436,6 @@ export function ScheduleReportPage() {
             setEditingKey(null);
             void load();
             flash(`Recipients for ${editingRow.name} saved — applies from its next scheduled run.`);
-          }}
-        />
-      )}
-      {showImport && (
-        <ImportModal
-          onClose={() => setShowImport(false)}
-          onApplied={() => {
-            setShowImport(false);
-            void load();
-            flash('Overrides imported and applied.');
           }}
         />
       )}
