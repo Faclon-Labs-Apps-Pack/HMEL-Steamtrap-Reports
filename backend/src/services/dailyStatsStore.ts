@@ -91,22 +91,47 @@ export async function writeDay(key: string, counts: Map<string, DeviceStatCounts
  */
 export function aggregateStatsFromStore(from: Date, to: Date, devIDs: string[]): Map<string, DeviceTimeSeriesStats> {
   const summed = new Map<string, DeviceStatCounts>();
+  // Condition-only grouped counts are only valid if EVERY stored day in the window has them —
+  // a pre-2026-11-13 bucket lacks the fields, and a partial sum would silently undercount, so the
+  // whole window then reports "grouped unavailable" and callers fall back to the raw count.
+  const groupedIncomplete = new Set<string>();
   for (const key of eachDateKey(from, to)) {
     const day = readDay(key);
     if (!day) continue;
     for (const [devID, c] of day) {
-      const agg = summed.get(devID) ?? { statusChangeCount: 0, counts: emptyCounts(), totalPoints: 0 };
+      const agg = summed.get(devID) ?? { statusChangeCount: 0, counts: emptyCounts(), totalPoints: 0, changesIntoStatus: {}, groupedChangeCount: 0 };
       agg.statusChangeCount += c.statusChangeCount ?? 0;
       agg.totalPoints += c.totalPoints ?? 0;
       for (const col of STATUS_COLUMNS) agg.counts[col] += c.counts?.[col] ?? 0;
+      if (c.changesIntoStatus) {
+        for (const [label, n] of Object.entries(c.changesIntoStatus)) {
+          agg.changesIntoStatus![label] = (agg.changesIntoStatus![label] ?? 0) + n;
+        }
+        agg.groupedChangeCount = (agg.groupedChangeCount ?? 0) + (c.groupedChangeCount ?? 0);
+      } else {
+        groupedIncomplete.add(devID);
+      }
       summed.set(devID, agg);
     }
   }
   const out = new Map<string, DeviceTimeSeriesStats>();
   for (const devID of devIDs) {
-    out.set(devID, countsToStats(summed.get(devID) ?? { statusChangeCount: 0, counts: emptyCounts(), totalPoints: 0 }));
+    const agg = summed.get(devID) ?? { statusChangeCount: 0, counts: emptyCounts(), totalPoints: 0 };
+    if (groupedIncomplete.has(devID)) {
+      delete agg.changesIntoStatus;
+      delete agg.groupedChangeCount;
+    }
+    out.set(devID, countsToStats(agg));
   }
   return out;
+}
+
+/** Whether a stored day bucket carries the condition-only grouped change counts (post-2026-11-13 format). */
+export function dayHasGroupedCounts(key: string): boolean {
+  const day = readDay(key);
+  if (!day || day.size === 0) return day !== null; // an empty stored day has nothing to miss
+  for (const c of day.values()) return c.changesIntoStatus !== undefined; // one entry decides: whole file is written by one ingest
+  return true;
 }
 
 /**
@@ -120,11 +145,15 @@ export async function ensureDaysIngested(
   from: Date,
   to: Date,
   onProgress?: (msg: string) => void,
+  opts?: {
+    /** Also re-ingest stored days that predate the grouped change-count format (2026-11-13). */
+    refreshMissingGrouped?: boolean;
+  },
 ): Promise<{ ingested: number; skipped: number }> {
   let ingested = 0;
   let skipped = 0;
   for (const key of eachDateKey(from, to)) {
-    if (hasDay(key)) {
+    if (hasDay(key) && !(opts?.refreshMissingGrouped && !dayHasGroupedCounts(key))) {
       skipped++;
       continue;
     }

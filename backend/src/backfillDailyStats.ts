@@ -11,15 +11,23 @@ import { MONITORING_START, getPreviousDayRange } from './lib/dateRange';
  * history the reports then sum for WTD/MTD/YTD.
  *
  * Run:  npx tsx src/backfillDailyStats.ts
+ * With --refresh-grouped it ALSO re-ingests stored days that predate the condition-only grouped
+ * change-count bucket format (2026-11-13), so WTD/MTD/YTD change totals can use it everywhere.
  */
 async function main(): Promise<void> {
+  const refreshMissingGrouped = process.argv.includes('--refresh-grouped');
   console.log('[backfill] Loading devices…');
   const devices = await findDevicesByType('steam trap');
   const from = MONITORING_START;
   const to = getPreviousDayRange().end; // yesterday (last fully-completed day)
-  console.log(`[backfill] Ingesting ${dateKey(from)} → ${dateKey(to)} for ${devices.length} devices…`);
+  console.log(
+    `[backfill] Ingesting ${dateKey(from)} → ${dateKey(to)} for ${devices.length} devices` +
+      `${refreshMissingGrouped ? ' (refreshing pre-grouped-format days too)' : ''}…`,
+  );
 
-  const { ingested, skipped } = await ensureDaysIngested(devices, from, to, (m) => console.log(`[backfill] ${m}`));
+  const { ingested, skipped } = await ensureDaysIngested(devices, from, to, (m) => console.log(`[backfill] ${m}`), {
+    refreshMissingGrouped,
+  });
   console.log(`[backfill] Done. ingested=${ingested} day(s), skipped=${skipped} already-present day(s).`);
 }
 

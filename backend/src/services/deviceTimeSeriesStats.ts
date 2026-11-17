@@ -42,6 +42,16 @@ export interface DeviceStatCounts {
   statusChangeCount: number;
   counts: Record<StatusColumn, number>;
   totalPoints: number;
+  /**
+   * Condition-only per-status change counts for the day (same rules as the live sweep above:
+   * grouped labels, Flooding dropped, Offline/No Status readings invisible). Absent in buckets
+   * written before 2026-11-13 — aggregation treats a window containing any such day as "grouped
+   * counts unavailable" and the report falls back to the raw statusChangeCount. Per-day transition
+   * counts sum exactly for the single-day DTD window the daily report shows; a multi-day sum would
+   * miss cross-midnight transitions, but no multi-day window displays change counts.
+   */
+  changesIntoStatus?: Record<string, number>;
+  groupedChangeCount?: number;
 }
 
 function emptyPercentages(): Record<StatusColumn, number> {
@@ -67,7 +77,12 @@ export function countsToStats(c: DeviceStatCounts): DeviceTimeSeriesStats {
       percentages[col] = (c.counts[col] / base) * 100;
     }
   }
-  return { statusChangeCount: c.statusChangeCount, statusPercentages: percentages };
+  return {
+    statusChangeCount: c.statusChangeCount,
+    statusPercentages: percentages,
+    changesIntoStatus: c.changesIntoStatus,
+    groupedChangeCount: c.groupedChangeCount,
+  };
 }
 
 /**
@@ -90,10 +105,16 @@ export async function getStatCountsByDevice(
     const points = seriesByDevID.get(device.devID) ?? [];
     const counts = emptyCounts();
     for (const point of points) counts[classifyStatus(point.value)] += 1;
+    // Condition-only change counts, stored per day so the scheduled daily report's cache path can
+    // show the same per-status breakdown the on-demand report has (see changesIntoStatus docs).
+    const conditionPoints = points.filter((p) => CONDITION_LABELS.has(analysisStatusGroup(classifyStatus(p.value))));
+    const changesIntoStatus = countChangesIntoStatus(conditionPoints, (value) => analysisStatusGroup(classifyStatus(value)));
     result.set(device.devID, {
       statusChangeCount: countStatusChanges(points),
       counts,
       totalPoints: points.length,
+      changesIntoStatus,
+      groupedChangeCount: Object.values(changesIntoStatus).reduce((s, n) => s + n, 0),
     });
   }
   return result;

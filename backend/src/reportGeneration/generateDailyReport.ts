@@ -5,7 +5,7 @@ import { findDevicesByType, getLastDataPoints } from '../services/iosenseApi';
 import { getCorrectiveActions, type CorrectiveActionRecord } from '../services/correctiveActionApi';
 import { getFeedbackDatesByDevice } from '../services/feedbackApi';
 import { getTimeSeriesStatsByDevice, type DeviceTimeSeriesStats } from '../services/deviceTimeSeriesStats';
-import { aggregateStatsFromStore, ensureDaysIngested } from '../services/dailyStatsStore';
+import { aggregateStatsFromStore, ensureDaysIngested, ingestDay, dayHasGroupedCounts, dateKey } from '../services/dailyStatsStore';
 import { getDevicePropertiesByDevice } from '../services/devicePropertiesApi';
 import { getSteamLossByDevice, getSteamSavingByDevice, getSteamConsumptionTotal } from '../services/steamConsumptionApi';
 import { buildDailyAnalysisRows, buildDailyLiveStatusRows } from '../lib/buildDailyReportRows';
@@ -66,8 +66,18 @@ function unitHealthPct(unitDevices: Device[], stats: Map<string, DeviceTimeSerie
   return sum / unitDevices.length;
 }
 
+/**
+ * Unit-total status changes for a window — prefers the condition-only grouped count (same
+ * methodology as the Analysis columns; multi-day windows sum per-day counts, so a change crossing
+ * midnight is not counted — negligible next to the phantom Offline flips the raw count included).
+ * Falls back to the raw count for windows containing pre-2026-11-13 cache buckets (run
+ * `npm run backfill:stats -- --refresh-grouped` once to upgrade them all).
+ */
 function unitStatusChanges(unitDevices: Device[], stats: Map<string, DeviceTimeSeriesStats>): number {
-  return unitDevices.reduce((s, d) => s + (stats.get(d.devID)?.statusChangeCount ?? 0), 0);
+  return unitDevices.reduce((s, d) => {
+    const st = stats.get(d.devID);
+    return s + (st?.groupedChangeCount ?? st?.statusChangeCount ?? 0);
+  }, 0);
 }
 
 function sumForDevices(devIDs: string[], countByDevID: Map<string, number>): number {
@@ -212,6 +222,13 @@ export async function generateDailyReportWorkbooks(
       report(`Analyzing S1 history (cycle window) for ${devices.length} devices…`);
       timeSeriesStatsByDevID = await getTimeSeriesStatsByDevice(devices, startMs, endMs);
     } else {
+      // Self-heal: a report-day bucket written by pre-2026-11-13 code lacks the condition-only
+      // per-status change counts the Analysis sheet now shows — re-ingest that one day (one light
+      // 24h fetch) so the first post-deploy report doesn't fall back to the raw count.
+      if (!dayHasGroupedCounts(dateKey(reportDay))) {
+        report(`Refreshing daily-stats bucket for ${dateKey(reportDay)} (adding per-status change counts)…`);
+        await ingestDay(allDevices, reportDay);
+      }
       timeSeriesStatsByDevID = aggregateStatsFromStore(reportDay, reportDay, allDevIDs);
     }
     wtdStats = aggregateStatsFromStore(wtdFrom, reportDay, allDevIDs);
@@ -232,6 +249,16 @@ export async function generateDailyReportWorkbooks(
       ytdStats = await getTimeSeriesStatsByDevice(devices, toEpochMs(ytdRange.start), endMs);
     }
   }
+
+  // The daily report's change counts use the CONDITION-ONLY grouped logic (client request
+  // 2026-11-13 — the same rules the on-demand range report has used since c180796): counted on
+  // grouped labels over real conditions only, so a telemetry gap (Offline/No Status) is never a
+  // "change". Falls back to the raw count only if grouped data is somehow unavailable (an
+  // old-format cache bucket that could not be refreshed). This also flows into the Summary
+  // sheet's status-change total, keeping it equal to the Analysis columns' sum.
+  timeSeriesStatsByDevID = new Map(
+    [...timeSeriesStatsByDevID].map(([id, s]) => [id, { ...s, statusChangeCount: s.groupedChangeCount ?? s.statusChangeCount }]),
+  );
 
   report(`Loading device properties (pressure, baseline temps, leak rate) for ${devices.length} devices…`);
   const propertiesByDevID = await getDevicePropertiesByDevice(devices);
@@ -340,7 +367,9 @@ export async function generateDailyReportWorkbooks(
       logoImageId,
     );
     const analysisSheet = workbook.addWorksheet('Analysis');
-    buildDailyAnalysisSheet(analysisSheet, analysisRows, periodLabel ? { periodLabel } : undefined);
+    // Per-status "Change in X status" columns now also appear in the scheduled daily report
+    // (client request 2026-11-13), matching the on-demand range report.
+    buildDailyAnalysisSheet(analysisSheet, analysisRows, { includePerStatusChanges: true, periodLabel });
     const liveStatusSheet = workbook.addWorksheet('Live Status');
     buildDailyLiveStatusSheet(liveStatusSheet, liveStatusRows);
 
