@@ -28,7 +28,7 @@ import { startFileServer } from './fileServer';
 import { scheduleReport, longSetTimeout } from './scheduler/scheduleReport';
 import { addPendingEmail, removePendingEmail, getPendingEmails, type PendingEmail } from './scheduler/pendingEmails';
 import { logReport } from './scheduler/reportLog';
-import { sendReportEmail } from './email/sendReportEmail';
+import { sendReportEmail, isQuotaError } from './email/sendReportEmail';
 import { saveWorkbook } from './reportGeneration/saveWorkbook';
 import { generateManagementReportWorkbooks } from './reportGeneration/generateManagementReport';
 import { generateDailyReportWorkbooks } from './reportGeneration/generateDailyReport';
@@ -408,9 +408,21 @@ async function sendPendingList(pendings: PendingEmail[]): Promise<void> {
   // run otherwise completes "quietly" and the gap is only noticed when a recipient complains.
   if (failures.length > 0) {
     const first = failures[0].err;
+    // Quota is a fleet-wide, transient condition: if IOsense is out of send-quota, every unit in
+    // the run is failing for the same reason and the fix is to retry the whole batch once quota
+    // resets — so call it out at the top of the alert rather than burying it per-line.
+    const quotaCount = failures.filter((f) => isQuotaError(f.err)).length;
     await sendOpsAlert({
-      subject: `${failures.length}/${pendings.length} report email(s) FAILED to send`,
+      subject:
+        `${failures.length}/${pendings.length} report email(s) FAILED to send` +
+        (quotaCount > 0 ? ' — EMAIL QUOTA EXHAUSTED' : ''),
       lines: [
+        ...(quotaCount > 0
+          ? [
+              `⚠ ${quotaCount} failure(s) were EMAIL QUOTA EXHAUSTED — IOsense is out of send quota, so the remaining units are almost certainly affected too. Retry the batch once the quota resets (resendDailyOnce / resendWeeklyOnce).`,
+              '',
+            ]
+          : []),
         'Stage: send — these reports were generated but their emails did not go out:',
         ...failures.map((f) => `• ${f.pending.section} (${f.pending.fileName}): ${f.err instanceof Error ? f.err.message : String(f.err)}`),
         '',

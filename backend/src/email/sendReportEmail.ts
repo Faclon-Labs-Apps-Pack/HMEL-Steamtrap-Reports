@@ -24,6 +24,45 @@ interface SendEmailResponse {
 }
 
 /**
+ * Why the sendEmail call failed, as reported by IOsense's (upgraded) endpoint. Before 2026-11-17
+ * the API always returned `success:true` and these failures were silent; it now returns
+ * `success:false` with a reason, so we classify it to drive the right recovery:
+ *  - 'quota'      — IOsense is out of email-send quota ("Not sending email due to no quota").
+ *                   TRANSIENT and fleet-wide: every other unit in the run is almost certainly
+ *                   failing too; retry the whole batch once the quota resets.
+ *  - 'attachment' — IOsense couldn't fetch the report file ("Error in getting attachment data").
+ *                   OUR problem: the /report URL was unreachable or the file was already gone.
+ *                   Retrying blind won't help until the file/URL is healthy.
+ *  - 'unknown'    — any other `success:false` / non-2xx.
+ */
+export type SendEmailFailureKind = 'quota' | 'attachment' | 'unknown';
+
+export class SendEmailError extends ApiError {
+  constructor(
+    message: string,
+    readonly kind: SendEmailFailureKind,
+    readonly rawErrors: string[],
+  ) {
+    super(message);
+    this.name = 'SendEmailError';
+  }
+}
+
+/** Maps IOsense's error strings to a failure kind. Matches on substrings so small wording changes
+ *  on their side (e.g. "no quota" vs "quota exceeded") still classify correctly. */
+export function classifySendErrors(errors: string[]): SendEmailFailureKind {
+  const joined = errors.join(' ').toLowerCase();
+  if (joined.includes('quota')) return 'quota';
+  if (joined.includes('attachment')) return 'attachment';
+  return 'unknown';
+}
+
+/** True when a send failed specifically because IOsense's email quota is exhausted (retryable). */
+export function isQuotaError(err: unknown): err is SendEmailError {
+  return err instanceof SendEmailError && err.kind === 'quota';
+}
+
+/**
  * IOsense's account-level email API. Attachments are PULL-based: IOsense's servers issue a GET
  * against each attachment's `url` themselves to fetch the file bytes — this call does not upload
  * anything. That means the URLs must be reachable from the public internet (see fileServer.ts /
@@ -70,7 +109,19 @@ export async function sendReportEmail(params: SendReportEmailParams): Promise<vo
   const body = (await response.json()) as SendEmailResponse;
   console.log(`[sendReportEmail] Raw API response (status ${response.status}):`, JSON.stringify(body));
   if (!response.ok || !body.success) {
-    throw new ApiError(`Failed to send report email: ${body.errors?.join(', ') ?? 'unknown error'}`);
+    const errors = body.errors ?? [];
+    const kind = classifySendErrors(errors);
+    const raw = errors.length > 0 ? errors.join(', ') : `unknown error (HTTP ${response.status})`;
+    // A human-readable lead so the report log and ops alert state plainly that the email did NOT
+    // go out and why — the whole point of IOsense's new typed errors (prior to this they always
+    // returned success and non-delivery was invisible to us).
+    const lead =
+      kind === 'quota'
+        ? 'IOsense refused to send — email quota exhausted (report NOT delivered)'
+        : kind === 'attachment'
+          ? 'IOsense could not fetch the report attachment (report NOT delivered)'
+          : 'IOsense rejected the send (report NOT delivered)';
+    throw new SendEmailError(`${lead}: ${raw}`, kind, errors);
   }
 
   console.log(`[sendReportEmail] Sent successfully to ${params.to.join(', ')}`);
