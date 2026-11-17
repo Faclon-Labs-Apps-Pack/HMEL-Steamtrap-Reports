@@ -299,6 +299,9 @@ function TimesModal({
                 previous calendar day (the default); 06:00:00 means yesterday 06:00 to today 06:00.
                 A non-midnight window is stated inside the report's Analysis sheet.
               </p>
+              <p className="BodySmallRegular" style={{ color: 'var(--ui-red)', fontWeight: 600, margin: '6px 0 0' }}>
+                Keep Cycle time 2 hrs earlier than the send time (e.g., send 16:00 → cycle 14:00 or earlier).
+              </p>
               {row.cycleTimeOverridden && (
                 <div style={{ marginTop: 6 }}>
                   <Button variant="Gray" size="XSmall" isLoading={saving} label="Revert cycle to 00:00:00" onClick={() => void save({ cycleTime: null })} />
