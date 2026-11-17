@@ -253,7 +253,7 @@ function TimesModal({
               variant="Primary"
               isLoading={saving}
               isDisabled={!sendTime}
-              label="Save times"
+              label="Save"
               onClick={() => void save(isDaily ? { sendTime, cycleTime } : { sendTime })}
             />
           }
@@ -279,7 +279,7 @@ function TimesModal({
             </p>
             {row.sendTimeOverridden && (
               <div style={{ marginTop: 6 }}>
-                <Button variant="Gray" size="XSmall" isLoading={saving} label="Revert send time to .env" onClick={() => void save({ sendTime: null })} />
+                <Button variant="Gray" size="XSmall" isLoading={saving} label="Revert to Send time" onClick={() => void save({ sendTime: null })} />
               </div>
             )}
           </div>
