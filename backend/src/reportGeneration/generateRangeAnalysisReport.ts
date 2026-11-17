@@ -27,6 +27,9 @@ const stamp = (d: Date) => `${pad2(d.getDate())}-${pad2(d.getMonth() + 1)}-${pad
  * Summary + Live Status sheets and their heavy WTD/MTD/YTD full-fleet sweeps. The "current
  * status" column still shows the status as of NOW (it's labeled live), same as the daily report.
  *
+ * Returns ONE workbook: selecting multiple sections merges all their departments into a single
+ * Analysis sheet (client request 2026-11-17) rather than one file per section.
+ *
  * Purely a read path: never writes to OUTPUT_DIR, never touches the scheduler or emails.
  */
 export async function generateRangeAnalysisWorkbooks(
@@ -82,7 +85,7 @@ export async function generateRangeAnalysisWorkbooks(
   report('Loading steam saving for the range…');
   const steamSavingByDevID = await getSteamSavingByDevice(devices, startMs, endMs);
 
-  report('Assembling per-unit workbooks…');
+  report('Assembling the workbook…');
   const allRows = buildDailyAnalysisRows(
     devices,
     lastDPs,
@@ -106,29 +109,34 @@ export async function generateRangeAnalysisWorkbooks(
     }).format(d).replace(',', '');
   const periodLabel = `Report data period: ${fmtIST(range.start)} to ${fmtIST(range.end)} (IST)`;
 
-  const reports: DailyUnitReport[] = [];
-  for (const unitName of unitNames) {
-    const analysisRows = allRows
-      .filter((r) => r.department === unitName)
-      .map((r, i) => ({ ...r, srNo: i + 1 }));
+  // ONE workbook, always (client request 2026-11-17): selecting multiple sections used to produce
+  // one file per section — now every selected department's rows are MERGED into a single Analysis
+  // sheet (rows grouped by unit, continuous Sr No; the Unit column tells departments apart). A
+  // single-section selection is simply the one-unit case of the same thing, byte-for-byte what it
+  // produced before.
+  const mergedLabel =
+    unitNames.length <= 3 ? unitNames.map((n) => n.trim()).join(' + ') : `${unitNames.length} Sections`;
+  const analysisRows = allRows
+    .slice()
+    .sort((a, b) => a.department.localeCompare(b.department) || a.devName.localeCompare(b.devName))
+    .map((r, i) => ({ ...r, srNo: i + 1 }));
 
-    const workbook = new Workbook();
-    workbook.creator = 'HMEL Steamtrap Reports';
-    workbook.created = generatedAt;
-    const sheet = workbook.addWorksheet('Analysis');
-    // On-demand UI report only: show the per-status "Change in <status> status" breakdown columns.
-    // The scheduled Daily/Weekly reports call buildDailyAnalysisSheet without this flag and are unaffected.
-    buildDailyAnalysisSheet(sheet, analysisRows, { includePerStatusChanges: true, periodLabel });
-    const title = `Steam Trap Analysis Report–${unitName.trim()}`;
-    applyPrintLayout(sheet, { reportDate, title, repeatHeaderRow: 2 });
+  const workbook = new Workbook();
+  workbook.creator = 'HMEL Steamtrap Reports';
+  workbook.created = generatedAt;
+  const sheet = workbook.addWorksheet('Analysis');
+  // On-demand UI report only: show the per-status "Change in <status> status" breakdown columns.
+  buildDailyAnalysisSheet(sheet, analysisRows, { includePerStatusChanges: true, periodLabel });
+  const title = `Steam Trap Analysis Report–${mergedLabel}`;
+  applyPrintLayout(sheet, { reportDate, title, repeatHeaderRow: 2 });
 
-    const reportName = `${title}-${rangeStamp}`;
-    reports.push({
-      unitName,
+  const reportName = `${title}-${rangeStamp}`;
+  return [
+    {
+      unitName: unitNames.length <= 3 ? mergedLabel : unitNames.join(', '),
       reportName,
       fileName: `${reportName.replace(/[\\/:*?"<>|]/g, '-')}.xlsx`,
       workbook,
-    });
-  }
-  return reports;
+    },
+  ];
 }
