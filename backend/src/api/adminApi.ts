@@ -57,6 +57,8 @@ interface LogEntry {
   fileName?: string;
   recipients?: string[];
   error?: string;
+  /** Send attempt this row is about — present on retrying rows, shown on the status pill. */
+  attempt?: number;
   rangeStart?: string;
   rangeEnd?: string;
 }

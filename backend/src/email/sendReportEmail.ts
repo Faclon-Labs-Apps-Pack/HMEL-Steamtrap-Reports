@@ -63,6 +63,15 @@ export function isQuotaError(err: unknown): err is SendEmailError {
 }
 
 /**
+ * True when IOsense could not fetch the attachment from our /report URL. Retryable on OUR side: the
+ * URL or the file was unavailable at that moment, so the same send can succeed later unchanged —
+ * see `recordAttachmentFailure` in `scheduler/sendFailures.ts`.
+ */
+export function isAttachmentError(err: unknown): err is SendEmailError {
+  return err instanceof SendEmailError && err.kind === 'attachment';
+}
+
+/**
  * IOsense's account-level email API. Attachments are PULL-based: IOsense's servers issue a GET
  * against each attachment's `url` themselves to fetch the file bytes — this call does not upload
  * anything. That means the URLs must be reachable from the public internet (see fileServer.ts /

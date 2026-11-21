@@ -28,13 +28,15 @@ function formatIST(iso: string): string {
   return `${p.day}-${p.month}-${p.year} ${p.hour}:${p.minute}:${p.second} IST`;
 }
 
-// Row tint by outcome: sent/generated = green, failed/generation-failed = red, skipped = amber.
+// Row tint by outcome: sent/generated = green, failed/generation-failed = red,
+// skipped/retrying = amber (retrying hasn't failed yet — it's still in the retry window).
 const STATUS_FILL: Record<ReportLogStatus, string> = {
   sent: 'FFE2EFDA',
   generated: 'FFE2EFDA',
   failed: 'FFF8CBAD',
   'generation-failed': 'FFF8CBAD',
   skipped: 'FFFFF2CC',
+  retrying: 'FFFFF2CC',
 };
 
 const HEADERS = ['Sr No', 'Date & Time (IST)', 'Status', 'Report', 'Section', 'File Name', 'Recipients', 'Reason'];

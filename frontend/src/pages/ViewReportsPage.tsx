@@ -70,11 +70,18 @@ const STATUS_COLOR: Record<string, StatusBadgeColor> = {
   failed: 'Negative',
   'generation-failed': 'Negative',
   skipped: 'Notice',
+  // Not delivered yet, but not a failure either — the backend is still retrying it.
+  retrying: 'Notice',
 };
 
 interface LogRow extends ReportLogEntry {
   id: string;
   [key: string]: unknown;
+}
+
+/** Pill text: a retry in progress carries its attempt number, so "stuck" is visible at a glance. */
+function statusLabel(row: ReportLogEntry): string {
+  return row.status === 'retrying' && row.attempt ? `retrying · attempt ${row.attempt}` : row.status;
 }
 
 function formatTime(iso: string): string {
@@ -118,6 +125,7 @@ const STATUS_OPTIONS: Record<LogMode, FilterOption[]> = {
     { id: '', label: 'All statuses' },
     { id: 'sent', label: 'Sent' },
     { id: 'generated', label: 'Generated' },
+    { id: 'retrying', label: 'Retrying' },
     { id: 'failed', label: 'Failed' },
     { id: 'skipped', label: 'Skipped' },
     { id: 'generation-failed', label: 'Generation failed' },
@@ -125,6 +133,7 @@ const STATUS_OPTIONS: Record<LogMode, FilterOption[]> = {
   scheduled: [
     { id: '', label: 'All statuses' },
     { id: 'sent', label: 'Sent' },
+    { id: 'retrying', label: 'Retrying' },
     { id: 'failed', label: 'Failed' },
     { id: 'skipped', label: 'Skipped' },
     { id: 'generation-failed', label: 'Generation failed' },
@@ -191,7 +200,7 @@ function ReportDetailModal({ row, onClose }: { row: LogRow; onClose: () => void 
           )}
           <div>
             <FieldLabel>Status</FieldLabel>
-            <Badge size="Small" color={STATUS_COLOR[row.status] ?? 'Neutral'} label={row.status} />
+            <Badge size="Small" color={STATUS_COLOR[row.status] ?? 'Neutral'} label={statusLabel(row)} />
           </div>
           <div>
             <FieldLabel>Recipients{row.recipients?.length ? ` (${row.recipients.length})` : ''}</FieldLabel>
@@ -289,6 +298,8 @@ export function ReportLogTable({
   const sent = counts['sent'] ?? 0;
   const failed = (counts['failed'] ?? 0) + (counts['generation-failed'] ?? 0);
   const skipped = counts['skipped'] ?? 0;
+  // Still being retried — neither delivered nor given up on, so it belongs in neither tile above.
+  const retrying = counts['retrying'] ?? 0;
 
   return (
     <div>
@@ -302,6 +313,12 @@ export function ReportLogTable({
             <div className="value">{sent}</div>
             <div className="label">Successfully sent</div>
           </div>
+          {retrying > 0 && (
+            <div className="ui-metric is-amber">
+              <div className="value">{retrying}</div>
+              <div className="label">Retrying</div>
+            </div>
+          )}
           <div className="ui-metric is-red">
             <div className="value">{failed}</div>
             <div className="label">Failed</div>
@@ -398,7 +415,7 @@ export function ReportLogTable({
                       <TableCell contentType="text"><CellText title={row.reportType} /></TableCell>
                       <TableCell contentType="text"><CellText title={row.section} /></TableCell>
                       <TableCell contentType="text">
-                        <Badge size="Small" color={STATUS_COLOR[row.status] ?? 'Neutral'} label={row.status} />
+                        <Badge size="Small" color={STATUS_COLOR[row.status] ?? 'Neutral'} label={statusLabel(row)} />
                       </TableCell>
                       <TableCell contentType="text"><CellText title={row.fileName ?? '—'} /></TableCell>
                       {mode !== 'generated' && (

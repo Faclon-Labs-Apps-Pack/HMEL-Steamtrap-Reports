@@ -360,6 +360,32 @@ export function getDeliveryConfirmWaitMs(): number {
   return (Number.isFinite(s) && s > 0 ? s : 90) * 1000;
 }
 
+// Attachment-failure retries. When IOsense reports it could not fetch the attachment ("Error in
+// getting attachment data"), or our own pre-flight finds the public /report URL unreachable, the
+// report is NOT abandoned: it is sent again ATTACHMENT_RETRY_INTERVAL_MINUTES later, up to
+// ATTACHMENT_MAX_ATTEMPTS sends in total, and the admins (ALERT_RECIPIENTS) are alerted only once
+// those are spent — with the reports that failed, why, and how many attempts were made.
+//
+// DEFAULT: 2 attempts — the original send plus ONE retry 5 minutes later.
+export function getAttachmentMaxAttempts(): number {
+  const n = Number(process.env.ATTACHMENT_MAX_ATTEMPTS ?? '2');
+  // At least 1: a value of 1 means "no retry at all", anything lower is meaningless.
+  return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 2;
+}
+
+export function getAttachmentRetryIntervalMs(): number {
+  const m = Number(process.env.ATTACHMENT_RETRY_INTERVAL_MINUTES ?? '5');
+  return (Number.isFinite(m) && m > 0 ? m : 5) * 60 * 1000;
+}
+
+// Backstop only: no report is retried more than this long after its FIRST failure, however many
+// attempts it has left. With the defaults above the attempt cap always bites first — this exists so
+// that raising ATTACHMENT_MAX_ATTEMPTS can't quietly leave a report retrying into the next run.
+export function getAttachmentRetryWindowMs(): number {
+  const m = Number(process.env.ATTACHMENT_RETRY_WINDOW_MINUTES ?? '60');
+  return (Number.isFinite(m) && m > 0 ? m : 60) * 60 * 1000;
+}
+
 // Port for the STANDALONE admin/test server (src/adminServer.ts) — the admin API + frontend
 // WITHOUT the scheduler (it never generates on a timer and never sends email). The production
 // entry point (src/scheduler.ts) instead serves the same admin API on FILE_SERVER_PORT.

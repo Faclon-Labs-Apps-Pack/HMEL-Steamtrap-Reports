@@ -26,9 +26,10 @@ import {
 } from './scheduler/effectiveSchedule';
 import { startFileServer } from './fileServer';
 import { scheduleReport, longSetTimeout } from './scheduler/scheduleReport';
-import { addPendingEmail, removePendingEmail, getPendingEmails, type PendingEmail } from './scheduler/pendingEmails';
+import { addPendingEmail, claimPendingEmail, getPendingEmails, type PendingEmail } from './scheduler/pendingEmails';
 import { logReport } from './scheduler/reportLog';
-import { sendReportEmail, isQuotaError } from './email/sendReportEmail';
+import { sendReportEmail } from './email/sendReportEmail';
+import { recordAttachmentFailure, recordSendFailure } from './scheduler/sendFailures';
 import { saveWorkbook } from './reportGeneration/saveWorkbook';
 import { generateManagementReportWorkbooks } from './reportGeneration/generateManagementReport';
 import { generateDailyReportWorkbooks } from './reportGeneration/generateDailyReport';
@@ -397,38 +398,23 @@ async function sendPendingList(pendings: PendingEmail[]): Promise<void> {
   const sent: PendingEmail[] = [];
   for (const pending of pendings) {
     try {
-      await sendPending(pending);
-      sent.push(pending);
+      // A 'skipped' result means another sender already delivered this one — not a send of ours, so
+      // it must not go into `sent` (which drives the did-IOsense-actually-fetch-it confirmation).
+      if ((await sendPending(pending)) === 'sent') sent.push(pending);
     } catch (err) {
       console.error(`[sendPending] Send failed for ${pending.fileName} — continuing with the rest:`, err);
       failures.push({ pending, err });
     }
   }
-  // Detection layer: if any report that was generated couldn't be emailed, alert immediately — the
-  // run otherwise completes "quietly" and the gap is only noticed when a recipient complains.
+  // Detection layer: every failure here was already classified, logged and (for attachment errors)
+  // queued for retry by `recordSendFailure` inside sendPending — which also owns the admin alert, so
+  // that one outage produces ONE email covering the whole batch instead of one per unit. All that's
+  // left is a run-level summary in the service log.
   if (failures.length > 0) {
-    const first = failures[0].err;
-    // Quota is a fleet-wide, transient condition: if IOsense is out of send-quota, every unit in
-    // the run is failing for the same reason and the fix is to retry the whole batch once quota
-    // resets — so call it out at the top of the alert rather than burying it per-line.
-    const quotaCount = failures.filter((f) => isQuotaError(f.err)).length;
-    await sendOpsAlert({
-      subject:
-        `${failures.length}/${pendings.length} report email(s) FAILED to send` +
-        (quotaCount > 0 ? ' — EMAIL QUOTA EXHAUSTED' : ''),
-      lines: [
-        ...(quotaCount > 0
-          ? [
-              `⚠ ${quotaCount} failure(s) were EMAIL QUOTA EXHAUSTED — IOsense is out of send quota, so the remaining units are almost certainly affected too. Retry the batch once the quota resets (resendDailyOnce / resendWeeklyOnce).`,
-              '',
-            ]
-          : []),
-        'Stage: send — these reports were generated but their emails did not go out:',
-        ...failures.map((f) => `• ${f.pending.section} (${f.pending.fileName}): ${f.err instanceof Error ? f.err.message : String(f.err)}`),
-        '',
-        authHint(first),
-      ],
-    });
+    console.warn(
+      `[sendPending] ${failures.length}/${pendings.length} report email(s) did not go out this run — ` +
+        'see the per-report log lines above for the reason and whether a retry is pending.',
+    );
   }
   // Confirm IOsense actually downloaded each sent report; resend/alert on misses.
   await confirmBatchDelivery(sent);
@@ -455,7 +441,17 @@ async function verifyFileBeforeSend(fileName: string): Promise<void> {
   }
 }
 
-async function sendPending(pending: PendingEmail): Promise<void> {
+async function sendPending(pending: PendingEmail): Promise<'sent' | 'skipped'> {
+  // CLAIM FIRST — exactly one sender may send each queued report. A restart between generation and
+  // the send time leaves two senders for the same occurrence (startup recovery's per-entry timers,
+  // plus the catch-up generation that same restart triggers for an occurrence whose generate time
+  // has already passed). Report files are one-shot, so the loser of that race used to fail on a
+  // 404 and alert "report NOT delivered" about a report that had just been delivered by the winner.
+  if (!(await claimPendingEmail(pending.fileName))) {
+    console.log(`[sendPending] ${pending.fileName} was already claimed by another sender — skipping this duplicate send.`);
+    return 'skipped';
+  }
+
   await verifyFileBeforeSend(pending.fileName);
   console.log(`[sendPending] Attachment URL IOsense will fetch: ${pending.downloadUrl}`);
 
@@ -465,29 +461,20 @@ async function sendPending(pending: PendingEmail): Promise<void> {
   // alert, and leave the pending entry for recovery to retry once the URL is healthy again.
   if (isDeliveryGuardEnabled() && !(await isReportUrlReachable(pending.downloadUrl))) {
     const msg = `Public report URL not reachable before send — IOsense would fail to fetch the attachment: ${pending.downloadUrl}`;
-    await logReport({ reportType: pending.reportType, section: pending.section, status: 'failed', fileName: pending.fileName, recipients: pending.recipients, error: msg });
-    await sendOpsAlert({
-      subject: `Report NOT sent — attachment URL unreachable (${pending.section})`,
-      lines: [msg, 'Left pending for retry. Check the file server and the public /report URL health.'],
-    });
+    // Same root cause as IOsense's "Error in getting attachment data", caught one step earlier — so
+    // it gets the same treatment: keep retrying for the retry window, alert only once that's spent.
+    await recordAttachmentFailure(pending, msg, sendPending);
     throw new Error(msg);
   }
 
   try {
     await emailReport(pending);
   } catch (err) {
-    // Log the failure with its reason; leave the pending entry in place so startup recovery retries it.
-    await logReport({
-      reportType: pending.reportType,
-      section: pending.section,
-      status: 'failed',
-      fileName: pending.fileName,
-      recipients: pending.recipients,
-      error: err instanceof Error ? err.message : String(err),
-    });
+    // Classify, log, and either retry (attachment) or alert the admins (quota / unclassified). The
+    // pending entry is put back either way, so startup recovery can still pick the report up.
+    await recordSendFailure(pending, err, sendPending);
     throw err;
   }
-  await removePendingEmail(pending.fileName);
   await logReport({
     reportType: pending.reportType,
     section: pending.section,
@@ -495,6 +482,7 @@ async function sendPending(pending: PendingEmail): Promise<void> {
     fileName: pending.fileName,
     recipients: pending.recipients,
   });
+  return 'sent';
 }
 
 /**
@@ -515,8 +503,9 @@ async function recoverPendingEmails(): Promise<void> {
     }
     longSetTimeout(async () => {
       try {
-        await sendPending(entry);
-        console.log(`[scheduler] Recovered send complete for ${entry.fileName}.`);
+        if ((await sendPending(entry)) === 'sent') {
+          console.log(`[scheduler] Recovered send complete for ${entry.fileName}.`);
+        }
       } catch (err) {
         console.error(`[scheduler] Recovered send FAILED for ${entry.fileName}:`, err);
       }

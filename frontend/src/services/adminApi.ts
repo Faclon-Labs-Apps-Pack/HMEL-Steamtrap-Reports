@@ -8,10 +8,12 @@ export interface ReportLogEntry {
   time: string;
   reportType: 'weekly' | 'daily' | 'generated';
   section: string;
-  status: 'sent' | 'failed' | 'skipped' | 'generation-failed' | 'generated';
+  status: 'sent' | 'retrying' | 'failed' | 'skipped' | 'generation-failed' | 'generated';
   fileName?: string;
   recipients?: string[];
   error?: string;
+  /** Which send attempt this row is about — set while a report is being retried (1 = first). */
+  attempt?: number;
   /** For on-demand `generated` reports: the custom range (ISO) the report covers. */
   rangeStart?: string;
   rangeEnd?: string;

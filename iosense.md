@@ -96,3 +96,24 @@ the report it feeds. All calls are made from the backend (`backend/src/services/
 | `account/subuser/child/<roleId>/<page>/<pageSize>` | PUT | appserver.iosense.io/api | `backend/src/api/iosenseSubUser.ts` | Sub-user name/email/active-status per role; paginate on `totalCount`. Non-fatal if it fails (identity display only). |
 
 Role → access mapping lives in `backend/src/api/access.ts` (unit tests: `src/tests/accessResolver.test.ts`): unit-level scoping from roleName ("HGU Read", "Petchem PPU - HDPE", "FCC PPU Edit" → Edit = Read), plant-level for "Refinery/Petchem Read", "All Read rights" → everything; a user in NO role's subUsers = main account = full admin access.
+
+## Send report email (error contract documented 2026-11-18)
+
+| API | Method | Host | Used by |
+|---|---|---|---|
+| `account/sendEmail` | PUT | connector.iosense.io/api | `backend/src/email/sendReportEmail.ts` (reports) · `backend/src/services/alerting.ts` (ops alerts) |
+
+Body: `{ to[], cc[], subject, template: "reports reportMail", attachments: [{ url, method: "GET", fileName }], additionalInfo: { reportTitle, reportGenerationTime, message } }`.
+
+**Attachments are PULL-based** — IOsense's servers issue their own `GET` against each attachment `url`, so that URL must be publicly reachable at send time. Our file server deletes each report once it has been served (one-shot), which is also how we confirm delivery.
+
+Responses — the endpoint used to return `success: true` unconditionally; since 2026-11-17 it reports failures, and we classify them (`SendEmailError.kind`) because they need opposite handling:
+
+| Response | kind | What we do |
+|---|---|---|
+| `{"success": true}` | — | logged `sent` |
+| `{"success": false, "errors": ["Not sending email due to no quota"]}` | `quota` | **No retry** — fleet-wide and not fixable from our side. Report stays queued, admins (`ALERT_RECIPIENTS`) alerted immediately; resend after the reset with `resendDailyOnce` / `resendWeeklyOnce`. |
+| `{"success": false, "errors": ["Error: Error in getting attachment data"]}` | `attachment` | IOsense couldn't fetch our URL — **sent again after `ATTACHMENT_RETRY_INTERVAL_MINUTES`, up to `ATTACHMENT_MAX_ATTEMPTS` sends in total** (default: 2 = the original plus one retry 5 min later; the file is restored from the archive before each retry). `ATTACHMENT_RETRY_WINDOW_MINUTES` (60) is a time backstop for when the cap is raised. Logged `retrying`; admins alerted only once the attempts are spent, with the reports, the reason and the attempt count. |
+| anything else / non-2xx | `unknown` | logged `failed`, admins alerted. |
+
+Classification and retry policy: `backend/src/scheduler/sendFailures.ts` (tests: `src/tests/sendFailures.test.ts`).
